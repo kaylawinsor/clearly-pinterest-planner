@@ -2640,7 +2640,7 @@ function plannerCalHTML(d, onlyWeeks = null) {
         role="button" tabindex="0" aria-label="Plan a pin on ${fmtDate(iso, {month: 'long', day: 'numeric'})}" style="cursor:pointer">
       <span class="dnum">${dt.getDate()}</span>
       ${pins.length > 2 ? `<span class="busy">${pins.length}</span>` : ''}
-      ${due.map(s2 => `<span class="ev" style="background:var(--golden-soft);color:var(--golden-deep)" title="Publish-by deadline: last day to publish ${esc(s2.name)} content and still catch the search wave">⚑ ${esc(s2.name)} · publish by</span>`).join('')}
+      ${due.map(s2 => `<span class="ev" data-action="season-open" data-id="${s2.id}" role="button" tabindex="0" style="background:var(--golden-soft);color:var(--golden-deep);cursor:pointer" title="Publish-by deadline for ${esc(s2.name)} — click to see where this date comes from">⚑ ${esc(s2.name)} · publish by</span>`).join('')}
       ${pins.length ? `<div class="pt-row">${pins.slice(0, 2).map(p => pinThumbHTML(d, p, {size: 'cell'})).join('')}</div>` : ''}
       <div class="evdots">${due.map(() => '<span class="evdot" style="background:var(--golden)"></span>').join('')}${pins.map(p => `<span class="evdot ${p.status === 'published' ? 'ev-auto' : ''}"></span>`).join('')}</div>
     </div>`;
@@ -4129,7 +4129,7 @@ ${ui.plannerMode === 'list' ? TILES_CARD : ''}
           return `<li${horizon ? ' style="background:var(--surface-alt)"' : ''}>
             <span class="li-date">${fmtDate(start)}</span>
             <span class="li-main">${count ? `<strong>${count}</strong> pin${count === 1 ? '' : 's'} planned` : '<span class="dash">nothing planned</span>'}
-              ${due.map(s2 => ` <span class="chip warning sample-chip">${esc(s2.name)}: publish by ${fmtDate(seasonStatus(s2).publishBy)}</span>`).join('')}</span>
+              ${due.map(s2 => ` <span class="chip warning sample-chip" data-action="season-open" data-id="${s2.id}" role="button" tabindex="0" style="cursor:pointer" title="Click to see where this deadline comes from">${esc(s2.name)}: publish by ${fmtDate(seasonStatus(s2).publishBy)}</span>`).join('')}</span>
             ${horizon && !count && due.length ? staticChip('serious', 'alert', 'gap') : ''}</li>`;
         }).join('')}
       </ul>
@@ -4602,6 +4602,14 @@ function addModalHTML() {
       <div class="pm-head">${icon(editMode ? 'sliders' : (spec.icon || 'plus'), 14)}<h3>${esc(title)}</h3>
         <button class="btn btn-ghost" data-action="addcancel" aria-label="Cancel" style="margin-left:auto;padding:4px 8px">${icon('x', 15)}</button></div>
       ${spec.hint && !editMode ? `<div style="padding:8px 16px;font-size:12px;color:var(--ink-2);border-bottom:1px solid var(--hairline)">${esc(spec.hint)}</div>` : ''}
+      ${editMode && list === 'seasons' ? (() => {
+        const st = seasonStatus(row);
+        return `<div style="padding:11px 16px;border-bottom:1px solid var(--hairline);background:var(--surface-alt);font-size:12.5px;line-height:1.55">
+          <strong>⚑ Publish by ${fmtDate(st.publishBy, {month: 'long', day: 'numeric'})}</strong> — that's the 1st of ${MONTH_NAMES[clamp(num(row.peakMonth) || 1, 1, 12) - 1]}
+          minus your <strong>${fmt.int(row.leadDays)} lead days</strong>. Pinterest searches for “${esc(row.name)}” build for weeks before the season peaks,
+          so pins published after this date miss most of the wave. Change the peak month or lead days below and the deadline moves with them.
+        </div>`;
+      })() : ''}
       ${list === 'pins' ? `<div style="display:flex;gap:12px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--hairline);background:var(--surface-alt)">
         <span style="width:64px;flex:0 0 auto;pointer-events:none">${pinThumbHTML(d, row, {size: 'sm', tools: false, cls: 'pt-modal'})}</span>
         <span style="flex:1;font-size:12px;color:var(--ink-2)">${row.img ? 'Your pin image is attached.' : editMode ? 'Showing placeholder art — attach your real pin design (JPG/PNG, cropped to 2:3 automatically).' : 'Optional — attach your pin design now or any time later (JPG/PNG, cropped to 2:3 automatically).'}</span>
@@ -4719,7 +4727,7 @@ document.addEventListener('click', e => {
     if (idx > -1) { ui.addModal = {list: 'pins', i: idx}; render(); }
   }
   else if (act === 'cal-day') {
-    if (e.target.closest('[data-action="cal-pin"]')) return;   // chip clicks win over the day
+    if (e.target.closest('[data-action="cal-pin"], [data-action="season-open"]')) return;   // pin tiles and deadline chips win over the day
     const row = NEW_ROW.pins();
     row.planned = btn.dataset.date;
     ui.addModal = {list: 'pins', row};
@@ -4733,6 +4741,10 @@ document.addEventListener('click', e => {
     const idx = (D().pins || []).findIndex(p => p.id === btn.dataset.id);
     if (idx > -1) { setPath(`pins.${idx}.img`, null); save(true); render(); toast('Placeholder art is back'); }
     else if (ui.addModal && ui.addModal.row && ui.addModal.row.id === btn.dataset.id) { ui.addModal.row.img = null; render(); toast('Placeholder art is back'); }
+  }
+  else if (act === 'season-open') {
+    const idx = (D().seasons || []).findIndex(s2 => s2.id === btn.dataset.id);
+    if (idx > -1) { ui.addModal = {list: 'seasons', i: idx}; render(); }
   }
   else if (act === 'export-publish') { exportPublishList(); }
   else if (act === 'export-all') { exportAllCSV(); }
