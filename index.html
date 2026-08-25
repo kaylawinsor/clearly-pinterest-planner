@@ -2239,6 +2239,14 @@ function lastImportOf(kind) {
   const l = (D().importLog || []).filter(x => x.kind === kind).sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
   return l ? fmtDate(l.date, {month: 'long', day: 'numeric'}) : null;
 }
+function importStampChip(kind) {
+  const l = (D().importLog || []).filter(x => x.kind === kind).sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+  if (!l) return '';
+  const age = daysSince(l.date) ?? 0;
+  const label = 'data imported ' + fmtDate(l.date, {month: 'long', day: 'numeric'});
+  return age > 35 ? staticChip('warning', 'clock', label + ' — time to re-export')
+    : staticChip('good', 'checkcircle', label);
+}
 function importHelpHTML() {
   if (!ui.importHelp) return '';
   const an = lastImportOf('analytics'), au = lastImportOf('audience');
@@ -3545,7 +3553,7 @@ function viewAudience() {
   const snaps = audSnapshots(d);
   const snap = audLatest(d);
   const head = viewHead('Audience & Interests', 'Who your audience is — and the board ideas hiding in what they love.',
-    `${lastImportOf('audience') ? `<span class="platnote">data imported ${lastImportOf('audience')}</span>` : ''}
+    `${importStampChip('audience')}
      <button class="btn btn-ghost" data-action="import-help">${icon('question', 14)}Where's this data from?</button>
      <button class="btn btn-import" data-action="import">${icon('upload', 14)}Import audience CSV</button>`);
 
@@ -3913,7 +3921,7 @@ function viewBoards() {
   const noData = b => period && b.active && (!b.m || b.mPeriod !== period);
 
   return viewHead('Boards & Keywords', 'Board-level SEO and performance — the most automatic view in the planner: all five metrics arrive with your CSV.',
-    `${lastImportOf('analytics') ? `<span class="platnote">data imported ${lastImportOf('analytics')}</span>` : ''}
+    `${importStampChip('analytics')}
      <button class="btn btn-ghost" data-action="import-help">${icon('question', 14)}Where's this data from?</button>
      <button class="btn btn-import" data-action="import">${icon('upload', 14)}Import CSV</button>`) + `
   <div class="grid">
