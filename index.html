@@ -2231,6 +2231,43 @@ function applyImport(pv) {
   toast('✓ Imported — nothing existing was overwritten with blanks');
 }
 
+/* ---------------- import help dialog ----------------
+   Where the CSVs live in Pinterest, how often to refresh, and when data last
+   came in. Shown on the Import button's first use (until "got it") and always
+   from the "Where's this data from?" buttons. */
+function lastImportOf(kind) {
+  const l = (D().importLog || []).filter(x => x.kind === kind).sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+  return l ? fmtDate(l.date, {month: 'long', day: 'numeric'}) : null;
+}
+function importHelpHTML() {
+  if (!ui.importHelp) return '';
+  const an = lastImportOf('analytics'), au = lastImportOf('audience');
+  return `<div class="pmodal" role="dialog" aria-modal="true" aria-label="How importing works">
+    <div class="pm-scrim" data-action="import-help-close"></div>
+    <div class="pm-panel pm-form">
+      <div class="pm-head">${icon('upload', 14)}<h3>Getting your Pinterest data in</h3>
+        <button class="btn btn-ghost" data-action="import-help-close" aria-label="Close" style="margin-left:auto;padding:4px 8px">${icon('x', 15)}</button></div>
+      <div style="padding:14px 16px;font-size:13px;display:grid;gap:13px;line-height:1.55">
+        <div>
+          <strong>1 · Analytics overview</strong> <span class="li-sub">→ fills Boards &amp; Keywords, daily impressions and pin reach</span>
+          <div class="li-sub" style="margin-top:3px">In Pinterest: <strong>Analytics → Overview</strong>, set the date range (90 days works well), then the <strong>Export</strong> button near the top right downloads the CSV.</div>
+          <div style="margin-top:3px">${an ? staticChip('good', 'checkcircle', 'last imported ' + an) : staticChip('neutral', 'clock', 'never imported yet')}</div>
+        </div>
+        <div>
+          <strong>2 · Audience insights</strong> <span class="li-sub">→ fills Audience &amp; Interests</span>
+          <div class="li-sub" style="margin-top:3px">In Pinterest: <strong>Analytics → Audience insights</strong>, then the <strong>export / download arrow</strong> at the top right.</div>
+          <div style="margin-top:3px">${au ? staticChip('good', 'checkcircle', 'last imported ' + au) : staticChip('neutral', 'clock', 'never imported yet')}</div>
+        </div>
+        <div class="li-sub">Pick <strong>both files at once</strong> if you like — a preview shows exactly what will change before anything is saved, and nothing existing is ever overwritten with blanks. A good rhythm: re-export the overview <strong>once a month</strong>, audience insights <strong>every month or two</strong>.</div>
+        <label class="li-sub" style="display:flex;gap:7px;align-items:center;cursor:pointer"><input type="checkbox" data-checkmeta="importHelpSkip" ${state.meta.importHelpSkip ? 'checked' : ''}> Got it — next time skip this and go straight to choosing files</label>
+      </div>
+      <div class="af-foot">
+        <button class="btn" data-action="import-help-close">Close</button>
+        <button class="btn btn-import" data-action="import-go">${icon('upload', 14)}Choose CSV file(s)</button>
+      </div>
+    </div></div>`;
+}
+
 /* ---------------- preview panel ---------------- */
 function importPreviewHTML() {
   const pv = ui.importPreview;
@@ -2883,8 +2920,9 @@ const MONTHS_BACK = (() => {
   return out;
 })();
 
-function sparkSVG(series, {id, w = 560, h = 120, money = true, labels = null, editPaths = null, zeroBase = true, marks = null} = {}) {
+function sparkSVG(series, {id, w = 560, h = 120, money = true, labels = null, tipLabels = null, editPaths = null, zeroBase = true, marks = null} = {}) {
   const L = labels || MONTHS_BACK;
+  const TL = tipLabels || L;   // full per-point labels: tooltips + the table view
   const vals = series.map(num);
   const present = vals.filter(v => v !== null);
   if (!present.length) {
@@ -2921,7 +2959,7 @@ function sparkSVG(series, {id, w = 560, h = 120, money = true, labels = null, ed
   return `
   <svg class="spark" id="${id}" width="100%" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="aspect-ratio:${w}/${h};display:block"
        role="img" aria-label="12-month trend. Latest value ${money ? fmt.money(present[present.length - 1]) : fmt.num(present[present.length - 1])}."
-       data-series="${vals.map(v => v === null ? '' : v).join('|')}" data-money="${money ? 1 : 0}" data-labels="${L.join('|')}">
+       data-series="${vals.map(v => v === null ? '' : v).join('|')}" data-money="${money ? 1 : 0}" data-labels="${TL.join('|')}">
     <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
       <stop class="gs0" offset="0"/><stop class="gs1" offset="1"/>
     </linearGradient></defs>
@@ -2941,10 +2979,13 @@ function sparkSVG(series, {id, w = 560, h = 120, money = true, labels = null, ed
       </g>`;
     }).join('')}
   </svg>
-  <details class="tablefall"><summary>View as table${editPaths ? ' / edit values' : ''}</summary>
+  ${editPaths || series.length <= 16 ? `<details class="tablefall"><summary>View as table${editPaths ? ' / edit values' : ''}</summary>
     <div class="tablewrap"><table class="data" style="min-width:0"><thead><tr>${L.map(mn => `<th class="num">${mn}</th>`).join('')}</tr></thead>
     <tbody><tr>${series.map((v, i) => `<td class="num">${editPaths ? edField(editPaths[i], {type: 'num', min: 3, label: L[i] + ' value'}) : (money ? fmt.money(v) : fmt.num(v))}</td>`).join('')}</tr></tbody></table></div>
-  </details>`;
+  </details>` : `<details class="tablefall"><summary>View as table</summary>
+    <div style="max-height:240px;overflow:auto;margin-top:6px"><table class="data" style="min-width:0"><thead><tr><th>Date</th><th class="num">${money ? 'Value' : 'Count'}</th></tr></thead>
+    <tbody>${series.map((v, i) => `<tr><td>${esc(TL[i] || '')}</td><td class="num">${money ? fmt.money(v) : fmt.num(v)}</td></tr>`).join('')}</tbody></table></div>
+  </details>`}`;
 }
 
 function donutSVG(pct, {size = 74, label = '', color = null} = {}) {
@@ -3168,7 +3209,7 @@ function renderTopbar() {
       ${DEMO ? `<span class="chip sagey" role="status">${icon('bulb', 13)}Live demo</span>` : ''}
       <button class="btn btn-ghost" data-action="theme" aria-label="Switch to ${document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'} mode" title="Light / dark mode">${icon(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon', 16)}</button>
       <button class="btn btn-ghost" data-action="palette" aria-label="Switch color palette (current: ${document.documentElement.dataset.palette === 'blush' ? 'Blush' : 'Clearly'})" title="Color palette — Clearly / Blush">${icon('swatch', 16)}</button>
-      <button class="btn btn-import" data-action="import">${icon('upload', 14)}<span class="bl">Import CSV</span></button>
+      <button class="btn btn-import" data-action="import" title="Bring in the CSV files Pinterest exports — Analytics overview and Audience insights">${icon('upload', 14)}<span class="bl">Import CSV</span></button>
       ${DEMO_LOCKED ? `<button class="btn" data-action="reset">${icon('reset', 14)}<span class="bl">Reset demo</span></button>` : `
       <button class="btn" data-action="backup">${icon('download', 14)}<span class="bl">Backup</span></button>
       <button class="btn" data-action="restore">${icon('upload', 14)}<span class="bl">Restore</span></button>
@@ -3391,7 +3432,7 @@ function viewHome() {
           ${tile('Last 7 days', stats7.sum === null ? '<span class="dash">—</span>' : `<span class="derived">${fmt.int(stats7.sum)}</span>`, stats7.days ? `${stats7.days} days reported` : '', false, 'teal')}
           ${tile('Fresh-pin ratio', fr.pct === null ? '<span class="dash">—</span>' : `<span class="derived">${fmt.int(fr.pct)}</span><span class="unit">%</span>`, fr.total ? `${fr.fresh} of ${fr.total} published this month ${benchBadge(fr.pct, d.benchmarks.freshRatio)}` : 'nothing published this month yet', false, 'golden')}
         </div>
-        ${impSeries.filter(r => r.v !== null).length ? sparkSVG(impSeries.map(r => r.v === null ? 0 : r.v), {id: 'sparkHome', money: false, labels: impSeries.map((r, i) => i % 14 === 0 ? fmtDate(r.date) : '')})
+        ${impSeries.filter(r => r.v !== null).length ? sparkSVG(impSeries.map(r => r.v === null ? 0 : r.v), {id: 'sparkHome', money: false, labels: impSeries.map((r, i) => i % 14 === 0 ? fmtDate(r.date) : ''), tipLabels: impSeries.map(r => fmtDate(r.date))})
           : `<div class="emptystate">Your daily impressions chart draws itself from the CSV import — Pinterest → Analytics → Overview → Export.</div>`}
         ${!sampleActive() && stats.days > 0 && stats.days < 14 ? `<div class="sparse">${icon('info', 13)}<span>Only ${stats.days} day${stats.days === 1 ? '' : 's'} of data so far — trends need about two weeks to mean anything. Nothing is wrong.</span></div>` : ''}
       </div>
@@ -3418,7 +3459,7 @@ function viewSetup() {
     <section class="card c6">
       ${cardH('sliders', 'Brand profile', '', 'coral')}
       <div class="card-b">
-        <div class="authrow">
+        <div class="authrow" style="display:grid;grid-template-columns:1fr 1fr">
           <div class="authcell"><div class="a-label">Brand / account</div>${edField('brand.name', {label: 'Brand name', min: 10})}</div>
           <div class="authcell"><div class="a-label">Niche</div>${edField('brand.niche', {label: 'Niche', min: 14, ph: 'e.g. budget home decor'})}</div>
           <div class="authcell"><div class="a-label">Website / shop URL</div>${edField('brand.url', {label: 'Website', min: 14, ph: 'yourshop.com'})}</div>
@@ -3430,15 +3471,18 @@ function viewSetup() {
 
     <section class="card c6">
       ${cardH('gauge', 'Benchmark targets', 'yours to tune', 'aqua')}
-      <div class="card-b">
-        <div class="tiles">
-          ${tile('Save rate', edField('benchmarks.saveRate', {type: 'num', label: 'Save-rate benchmark', min: 3}) + '<span class="unit">%</span>', 'saves ÷ impressions')}
-          ${tile('Outbound rate', edField('benchmarks.outboundRate', {type: 'num', label: 'Outbound-rate benchmark', min: 3}) + '<span class="unit">%</span>', 'clicks out ÷ impressions')}
-          ${tile('Engagement', edField('benchmarks.engRate', {type: 'num', label: 'Engagement benchmark', min: 3}) + '<span class="unit">%</span>', 'all engagement ÷ impressions')}
-          ${tile('Fresh-pin ratio', edField('benchmarks.freshRatio', {type: 'num', label: 'Fresh-ratio benchmark', min: 3}) + '<span class="unit">%</span>', 'new images ÷ published')}
-          ${tile('Pins / week', edField('benchmarks.weeklyPins', {type: 'num', label: 'Weekly pin target', min: 3}), 'your own pace, not a rule')}
-        </div>
-        <p class="hint-edit" style="margin:10px 0 0">Every chip and flag in the planner compares against these numbers — nothing is hardcoded.</p>
+      <div class="card-b flush">
+        ${[
+          ['saveRate', 'Save rate', 'saves ÷ impressions', '%'],
+          ['outboundRate', 'Outbound rate', 'clicks out ÷ impressions', '%'],
+          ['engRate', 'Engagement rate', 'all engagement ÷ impressions', '%'],
+          ['freshRatio', 'Fresh-pin ratio', 'new images ÷ published pins', '%'],
+          ['weeklyPins', 'Pins per week', 'your own pace, not a rule', ''],
+        ].map(([k, l, hint, unit]) => `<div class="seasonrow" style="grid-template-columns:1fr auto">
+          <span style="min-width:0"><strong>${l}</strong><div class="li-sub">${hint}</div></span>
+          <span style="font-family:var(--display);font-weight:800;font-size:18px;letter-spacing:-.01em;display:inline-flex;align-items:baseline;gap:1px">${edField('benchmarks.' + k, {type: 'num', min: 3, label: l + ' benchmark'})}<span class="unit" style="font-size:12px;color:var(--ink-2);font-weight:600">${unit}</span></span>
+        </div>`).join('')}
+        <p class="hint-edit" style="margin:10px 16px 12px">Every chip and flag in the planner compares against these numbers — nothing is hardcoded.</p>
       </div>
     </section>
 
@@ -3501,7 +3545,9 @@ function viewAudience() {
   const snaps = audSnapshots(d);
   const snap = audLatest(d);
   const head = viewHead('Audience & Interests', 'Who your audience is — and the board ideas hiding in what they love.',
-    `<button class="btn btn-import" data-action="import">${icon('upload', 14)}Import audience CSV</button>`);
+    `${lastImportOf('audience') ? `<span class="platnote">data imported ${lastImportOf('audience')}</span>` : ''}
+     <button class="btn btn-ghost" data-action="import-help">${icon('question', 14)}Where's this data from?</button>
+     <button class="btn btn-import" data-action="import">${icon('upload', 14)}Import audience CSV</button>`);
 
   if (!snap) return head + `<div class="grid">${audEmptyStateHTML('none')}</div>`;
   if (snap.notEnough) return head + `<div class="grid">${audEmptyStateHTML('notEnough', fmtDate(snap.date, {month: 'short', day: 'numeric', year: 'numeric'}))}</div>`;
@@ -3823,7 +3869,7 @@ function viewTraffic() {
       ${cardH('spark', 'Outbound clicks, last 30 days', 'from your daily-series import', 'teal')}
       <div class="card-b">
         ${sparkSVG(outboundSeries.map(r => r.v === null ? 0 : r.v), {id: 'sparkOut', money: false,
-          labels: outboundSeries.map((r, i) => i % 7 === 0 ? fmtDate(r.date) : '')})}
+          labels: outboundSeries.map((r, i) => i % 7 === 0 ? fmtDate(r.date) : ''), tipLabels: outboundSeries.map(r => fmtDate(r.date))})}
         <p class="hint-edit" style="margin:8px 0 0">Blank days chart as 0 but stay out of every average.</p>
       </div>
     </section>` : ''}
@@ -3867,7 +3913,9 @@ function viewBoards() {
   const noData = b => period && b.active && (!b.m || b.mPeriod !== period);
 
   return viewHead('Boards & Keywords', 'Board-level SEO and performance — the most automatic view in the planner: all five metrics arrive with your CSV.',
-    `<button class="btn btn-import" data-action="import">${icon('upload', 14)}Import CSV</button>`) + `
+    `${lastImportOf('analytics') ? `<span class="platnote">data imported ${lastImportOf('analytics')}</span>` : ''}
+     <button class="btn btn-ghost" data-action="import-help">${icon('question', 14)}Where's this data from?</button>
+     <button class="btn btn-import" data-action="import">${icon('upload', 14)}Import CSV</button>`) + `
   <div class="grid">
     <section class="card">
       <div class="card-b tight"><div class="tiles">
@@ -4164,7 +4212,8 @@ function viewPerformance() {
     : `<span class="derived">${fmt.pct(v, 2)}</span>${num(bench[benchKey]) !== null ? (v >= num(bench[benchKey]) ? ' <span class="bench up">↑</span>' : ' <span class="bench down">↓</span>') : ''}`;
 
   return viewHead('Pin Performance', 'Impressions arrive with your CSV; saves and clicks come off each pin’s own stats page — three quick fields for the pins you care about.',
-    `<button class="btn btn-import" data-action="import">${icon('upload', 14)}Import CSV</button>`) + `
+    `<button class="btn btn-ghost" data-action="import-help">${icon('question', 14)}Where's this data from?</button>
+     <button class="btn btn-import" data-action="import">${icon('upload', 14)}Import CSV</button>`) + `
   <div class="grid">
     <section class="card">
       <div class="card-b tight"><div class="tiles">
@@ -4346,7 +4395,7 @@ function viewReport() {
         ${tile('Save rate', saveRate === null ? '<span class="dash">—</span>' : `<span class="derived">${fmt.pct(saveRate, 2)}</span>`, benchBadge(saveRate, d.benchmarks.saveRate) || 'saves ÷ impressions')}
         ${tile('Fresh pins', fr.pct === null ? '<span class="dash">—</span>' : `<span class="derived">${fmt.int(fr.pct)}</span><span class="unit">%</span>`, fr.total ? `${fr.fresh} of ${fr.total} this month ${benchBadge(fr.pct, d.benchmarks.freshRatio)}` : 'none published this month')}
       </div>
-      ${impSeries.filter(r => r.v !== null).length >= 7 ? `<div class="rep-spark" style="margin-top:14px">${sparkSVG(impSeries.map(r => r.v === null ? 0 : r.v), {id: 'sparkRep', money: false, labels: impSeries.map((r, i) => i % 14 === 0 ? fmtDate(r.date) : '')})}</div>` : ''}
+      ${impSeries.filter(r => r.v !== null).length >= 7 ? `<div class="rep-spark" style="margin-top:14px">${sparkSVG(impSeries.map(r => r.v === null ? 0 : r.v), {id: 'sparkRep', money: false, labels: impSeries.map((r, i) => i % 14 === 0 ? fmtDate(r.date) : ''), tipLabels: impSeries.map(r => fmtDate(r.date))})}</div>` : ''}
       </div>
     </section>
 
@@ -4444,7 +4493,7 @@ function render() {
   renderNav();
   renderTopbar();
   const main = $('#main');
-  const modal = ui.addModal ? addModalHTML() : '';
+  const modal = (ui.addModal ? addModalHTML() : '') + importHelpHTML();
   // storage first: "your work is not being saved" outranks every other notice
   main.innerHTML = storageBanner() + demoBanner() + sampleBanner() + nudgeHTML() + importPreviewHTML() + (VIEW_FN[ui.view] || viewHome)() + modal;
   const anim = animPending && !reducedMotion();
@@ -4709,7 +4758,13 @@ document.addEventListener('click', e => {
     save(true); render();
     toast('\u2713 Draft written — edit away');
   }
-  else if (act === 'import') { $('#importFile').click(); }
+  else if (act === 'import') {
+    if (state.meta.importHelpSkip) $('#importFile').click();
+    else { ui.importHelp = true; render(); }
+  }
+  else if (act === 'import-help') { ui.importHelp = true; render(); }
+  else if (act === 'import-help-close') { ui.importHelp = null; render(); }
+  else if (act === 'import-go') { ui.importHelp = null; render(); $('#importFile').click(); }
   else if (act === 'import-commit') { if (ui.importPreview) applyImport(ui.importPreview); }
   else if (act === 'import-cancel') { ui.importPreview = null; render(); toast('Import cancelled — nothing was changed'); }
   else if (act === 'planmode') {
@@ -4855,6 +4910,7 @@ document.addEventListener('keydown', e => {
   if (!el.classList || !el.classList.contains('ed')) {
     if (e.key === 'Escape' && document.body.classList.contains('nav-open')) document.body.classList.remove('nav-open');
     else if (e.key === 'Escape' && ui.addModal) { ui.addModal = null; render(); }
+    else if (e.key === 'Escape' && ui.importHelp) { ui.importHelp = null; render(); }
     else if (e.key === 'Enter' && ui.addModal && el.classList && el.classList.contains('af-in') && el.tagName === 'INPUT') {
       const saveBtn = document.querySelector('.pmodal [data-action="addsave"]');
       if (saveBtn) saveBtn.click();
@@ -4886,6 +4942,11 @@ document.addEventListener('focusout', e => {
 /* Checkboxes, filters & status dropdowns */
 document.addEventListener('change', e => {
   const el = e.target;
+  if (el.dataset && el.dataset.checkmeta) {
+    state.meta[el.dataset.checkmeta] = el.checked;
+    save(false);
+    return;
+  }
   if (el.dataset && el.dataset.checkpath) {
     setPath(el.dataset.checkpath, el.checked);
     save(true);
