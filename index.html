@@ -1247,10 +1247,22 @@ function sampleData() {
        destUrl: blog, planned: isoOffset(2), status: 'scheduled', fresh: true,
        altText: 'Under-sink organizer with waterproof bins',
        desc: descFor('kitchen organization', 'Waterproof bins first, everything else second.')}),
+    // …and a second pin the SAME day, to a different board. Two pins a day is a
+    // normal Pinterest cadence, and the calendar shows both tiles side by side —
+    // the sample data has to demonstrate that a day is not limited to one pin.
+    P({title: 'Pantry labels that survive the dishwasher', keyword: 'pantry labels', format: 'standard', boardId: B['pantry-organization'].id,
+       destUrl: land, planned: isoOffset(2), status: 'scheduled', fresh: true,
+       altText: 'Waterproof labels on glass pantry jars',
+       desc: descFor('pantry labels', 'Vinyl, not paper — they go through the dishwasher and come back readable.')}),
     P({title: 'Playroom art wall kids can reach', keyword: 'playroom ideas', format: 'standard', boardId: B['playroom-ideas'].id,
        destUrl: etsy, planned: isoOffset(4), status: 'scheduled', fresh: true,
        altText: 'Gallery ledge art wall at child height in a playroom',
        desc: descFor('playroom ideas', 'Ledges, not frames — swap art in seconds.')}),
+    // second doubled-up day, so the pattern reads as deliberate rather than a fluke
+    P({title: 'Entryway bench with hidden shoe storage', keyword: 'entryway organization', format: 'standard', boardId: B['entryway-drop-zones'].id,
+       destUrl: blog, planned: isoOffset(4), status: 'scheduled', fresh: true,
+       altText: 'Entryway bench with baskets of shoes tucked underneath',
+       desc: descFor('entryway organization', 'The bench hides four pairs and the hooks take the rest.')}),
     P({title: 'Spring linen refresh checklist', keyword: 'linen care', format: 'standard', boardId: B['linen-care-laundry'].id,
        destUrl: blog, planned: isoOffset(6), status: 'scheduled', seasonal: seasonSpring, fresh: true,
        altText: 'Spring cleaning checklist beside folded linen',
