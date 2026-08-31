@@ -884,10 +884,15 @@ const PIN_SEO_RULES = {
   repeatMax: 2,           // keyword mentions in the description past which it is over-optimised
   seasonLeadMin: 45,      // a seasonal pin should be published at least this many days before its peak
   bands: {strong: 80, okay: 55},   // >=strong Strong · >=okay Okay · else Needs work
+  /* Fourteen weights for fourteen checks, in the checklist's own order and with its
+     own groupings — item 1 on the sheet is "keyword in the pin title, near the front",
+     one idea, so it is one check here rather than two. Over-repetition is NOT in this
+     list on purpose: the sheet carries it as a note under the keyword group rather than
+     a numbered row, so the engine raises it as an unweighted warning instead. */
   weights: {
-    kwInTitle: 10, kwFrontloaded: 8, kwFirstSentence: 10, kwImageText: 10,
-    kwFileName: 4, notOverRepeated: 4, relatedPhrases: 6, boardTitle: 6,
-    boardDesc: 4, destUrl: 5, ratio: 5, seasonLead: 5, altText: 5, titleBudget: 5,
+    kwInTitleFront: 18, titleBudget: 5, kwFirstSentence: 10, kwImageText: 10,
+    kwFileName: 4, altText: 5, relatedPhrases: 6, boardTitle: 6, boardDesc: 4,
+    destUrl: 5, ratio: 5, overlayLegible: 5, freshImage: 5, seasonLead: 5,
   },
 };
 
@@ -1062,7 +1067,7 @@ function starterData() {
     pins: [
       {id: uid(), title: 'My first planned pin', keyword: '', format: 'standard', boardId: '',
        destUrl: '', pinUrl: '', planned: todayISO(), status: 'idea', variant: '', seasonal: '',
-       altText: '', imgTextKw: false, fileName: '', fileNameKw: false, desc: '', ratio23: true, fresh: true,
+       altText: '', imgTextKw: false, overlayOK: false, fileName: '', fileNameKw: false, desc: '', ratio23: true, fresh: true,
        impressions: null, impPeriod: '', saves: null, pinClicks: null, outboundClicks: null, saves7: null,
        contentType: '', source: '', canonical: '', notes: ''},
     ],
@@ -1171,7 +1176,7 @@ function sampleData() {
   const purl = () => `https://www.pinterest.com/pin/${++pinNum}/`;
   const P = (o) => ({
     id: uid(), title: '', keyword: '', format: 'standard', boardId: '', destUrl: '', pinUrl: '',
-    planned: '', status: 'idea', variant: '', seasonal: '', altText: '', imgTextKw: false, fileName: '', fileNameKw: false, desc: '', ratio23: true, fresh: true,
+    planned: '', status: 'idea', variant: '', seasonal: '', altText: '', imgTextKw: false, overlayOK: false, fileName: '', fileNameKw: false, desc: '', ratio23: true, fresh: true,
     impressions: null, impPeriod: '', saves: null, pinClicks: null, outboundClicks: null, saves7: null,
     contentType: 'Organic', source: 'From you', canonical: 'No', notes: '', ...o,
   });
@@ -1183,64 +1188,64 @@ function sampleData() {
     P({title: 'Pantry zones: the 20-minute system', keyword: 'pantry organization', format: 'standard', boardId: B['pantry-organization'].id,
        destUrl: blog, pinUrl: purl(), planned: isoOffset(-58), status: 'published', fresh: true,
        altText: 'Labeled clear pantry bins arranged in zones on white shelves',
-       fileName: 'pantry-zones-20-minute-system.png', imgTextKw: true,
+       fileName: 'pantry-zones-20-minute-system.png', imgTextKw: true, overlayOK: true,
        desc: descFor('pantry organization', 'Five zones, one label sheet, and a bin list that fits a normal budget.'),
        impressions: 1503, impPeriod: period, saves: 38, pinClicks: 41, outboundClicks: 22, saves7: 21}),
     P({title: 'Toy storage that hides in plain sight', keyword: 'playroom ideas', format: 'video', boardId: B['playroom-ideas'].id,
        destUrl: etsy, pinUrl: purl(), planned: isoOffset(-49), status: 'published', fresh: true,
        altText: 'Closed cabinet toy storage in a family living room',
-       fileName: 'toy-storage-living-room.png', imgTextKw: true,
+       fileName: 'toy-storage-living-room.png', imgTextKw: true, overlayOK: true,
        desc: descFor('playroom ideas', 'The video walks the whole cleanup — 4 minutes, start to finish.'),
        impressions: 1121, impPeriod: period, saves: 29, pinClicks: 33, outboundClicks: 12, saves7: 16}),
     P({title: 'Small kitchen, big drawers', keyword: 'kitchen organization', format: 'standard', boardId: B['kitchen-storage'].id,
        destUrl: blog, pinUrl: purl(), planned: isoOffset(-71), status: 'published', fresh: true,
        altText: 'Organized kitchen drawer with bamboo dividers',
-       fileName: 'small-kitchen-storage-drawers.png', imgTextKw: true,
+       fileName: 'small-kitchen-storage-drawers.png', imgTextKw: true, overlayOK: true,
        desc: descFor('kitchen organization', 'Dividers beat bins in drawers — here’s the layout.'),
        impressions: 897, impPeriod: period, saves: 17, pinClicks: 19, outboundClicks: 9, saves7: 6}),
     P({title: 'The linen closet reset', keyword: 'linen care', format: 'standard', boardId: B['linen-care-laundry'].id,
        destUrl: etsy, pinUrl: purl(), planned: isoOffset(-44), status: 'published', fresh: true,
        altText: 'Folded linen stacks in labeled storage bags on closet shelves',
-       fileName: 'linen-closet-reset.png', imgTextKw: true,
+       fileName: 'linen-closet-reset.png', imgTextKw: true, overlayOK: true,
        desc: descFor('linen care', 'Fold, bag, label — and the storage bags are the ones from our shop.'),
        impressions: 764, impPeriod: period, saves: 22, pinClicks: 15, outboundClicks: 11, saves7: 13}),
     P({title: 'Entryway drop zone in 1 metre', keyword: 'entryway organization', format: 'standard', boardId: B['entryway-drop-zones'].id,
        destUrl: blog, pinUrl: purl(), planned: isoOffset(-63), status: 'published', fresh: true,
        altText: 'Narrow entryway with hooks, bench and shoe baskets',
-       fileName: 'entryway-organization-one-metre.png', imgTextKw: true,
+       fileName: 'entryway-organization-one-metre.png', imgTextKw: true, overlayOK: true,
        desc: descFor('entryway organization', 'Hooks, one bench, two baskets. That’s the whole system.'),
        impressions: 512, impPeriod: period, saves: 9, pinClicks: 8, outboundClicks: 4}),
     // A/B design variants — same content, two images; B wins on saves
     P({title: 'Free printable pantry labels', keyword: 'pantry labels', format: 'standard', boardId: B['pantry-organization'].id,
        destUrl: land, pinUrl: purl(), planned: isoOffset(-35), status: 'published', variant: 'A — flatlay photo', fresh: true,
        altText: 'Flatlay of printable pantry label sheet with scissors',
-       fileName: 'free-printable-pantry-labels-a.png', imgTextKw: true,
+       fileName: 'free-printable-pantry-labels-a.png', imgTextKw: true, overlayOK: true,
        desc: descFor('pantry labels', 'The label sheet is free — grab it at the link.'),
        impressions: 655, impPeriod: period, saves: 12, pinClicks: 14, outboundClicks: 8, saves7: 7}),
     P({title: 'Free printable pantry labels', keyword: 'pantry labels', format: 'standard', boardId: B['pantry-organization'].id,
        destUrl: land, pinUrl: purl(), planned: isoOffset(-35), status: 'published', variant: 'B — labels in use', fresh: true,
        altText: 'Labeled glass jars in a bright organized pantry',
-       fileName: 'free-printable-pantry-labels-b.png', imgTextKw: true,
+       fileName: 'free-printable-pantry-labels-b.png', imgTextKw: true, overlayOK: true,
        desc: descFor('pantry labels', 'Shot in a real pantry, not a studio — that’s the whole trick.'),
        impressions: 691, impPeriod: period, saves: 26, pinClicks: 21, outboundClicks: 15, saves7: 18}),
     // idea-format pin: no outbound link exists for this format → N/A, never 0%
     P({title: '5 playroom corners, 5 budgets', keyword: 'playroom ideas', format: 'idea', boardId: B['playroom-ideas'].id,
        destUrl: '', pinUrl: purl(), planned: isoOffset(-28), status: 'published', fresh: true,
        altText: 'Five playroom corner designs side by side',
-       fileName: 'playroom-ideas-5-corners.png', imgTextKw: true,
+       fileName: 'playroom-ideas-5-corners.png', imgTextKw: true, overlayOK: true,
        desc: descFor('playroom ideas', 'Five pages, five real budgets, zero renovations.'),
        impressions: 833, impPeriod: period, saves: 31, pinClicks: 24, saves7: 19}),
     // recycled repin of an old image — fresh:false, so the fresh/recycled compare has both sides
     P({title: 'Kitchen counter declutter checklist', keyword: 'kitchen organization', format: 'standard', boardId: B['kitchen-storage'].id,
        destUrl: blog, pinUrl: purl(), planned: isoOffset(-21), status: 'published', fresh: false,
        altText: 'Clear kitchen counter with one tray of essentials',
-       fileName: 'IMG_4471.png', imgTextKw: false,
+       fileName: 'IMG_4471.png', imgTextKw: false, overlayOK: false,
        desc: descFor('kitchen organization', 'Republished from the spring series — still the most-asked-for list.'),
        impressions: 402, impPeriod: period, saves: 6, pinClicks: 7, outboundClicks: 3, saves7: 2}),
     P({title: 'Small space living: 9 furniture swaps', keyword: 'small space living', format: 'video', boardId: B['small-space-living'].id,
        destUrl: blog, pinUrl: purl(), planned: isoOffset(-15), status: 'published', fresh: true,
        altText: 'Compact apartment living room with multifunctional furniture',
-       fileName: 'small-space-living-swaps.png', imgTextKw: true,
+       fileName: 'small-space-living-swaps.png', imgTextKw: true, overlayOK: true,
        desc: descFor('small space living', 'Every swap earns its footprint twice.'),
        impressions: 358, impPeriod: period, saves: 14, pinClicks: 11, outboundClicks: 6, saves7: 11}),
     // published but WEAK SEO on purpose: keyword missing from title + no alt text + thin desc
@@ -1252,25 +1257,25 @@ function sampleData() {
     P({title: 'Cosy reading nook under the stairs', keyword: 'small space living', format: 'standard', boardId: B['small-space-living'].id,
        destUrl: blog, pinUrl: purl(), planned: isoOffset(-8), status: 'published', fresh: true,
        altText: 'Reading nook with cushions built under a staircase',
-       fileName: 'reading-nook-under-stairs.png', imgTextKw: true,
+       fileName: 'reading-nook-under-stairs.png', imgTextKw: true, overlayOK: true,
        desc: descFor('small space living', 'The stairs were dead space. Now they’re the favourite seat.'),
        impressions: 143, impPeriod: period, saves: 5, pinClicks: 4, outboundClicks: 2, saves7: 5}),
     // recent publishes, too new for the export — impressions still empty, NOT zero
     P({title: 'Laundry symbols, finally decoded', keyword: 'linen care', format: 'standard', boardId: B['linen-care-laundry'].id,
        destUrl: land, pinUrl: purl(), planned: isoOffset(-3), status: 'published', fresh: true,
        altText: 'Printable laundry symbol chart pinned above a washing machine',
-       fileName: 'linen-care-laundry-symbols.png', imgTextKw: true,
+       fileName: 'linen-care-laundry-symbols.png', imgTextKw: true, overlayOK: true,
        desc: descFor('linen care', 'One chart, every symbol, free to print.')}),
     P({title: 'The 15-minute junk drawer fix', keyword: 'kitchen organization', format: 'video', boardId: B['kitchen-storage'].id,
        destUrl: blog, pinUrl: purl(), planned: isoOffset(-1), status: 'published', fresh: true,
        altText: 'Junk drawer before and after with organizer trays',
-       fileName: 'kitchen-organization-junk-drawer.png', imgTextKw: true,
+       fileName: 'kitchen-organization-junk-drawer.png', imgTextKw: true, overlayOK: true,
        desc: descFor('kitchen organization', 'Timed it. Fifteen minutes, one tray, done.')}),
     // scheduled — appear on Home "this week"
     P({title: 'Under-sink storage that survives leaks', keyword: 'kitchen organization', format: 'standard', boardId: B['kitchen-storage'].id,
        destUrl: blog, planned: isoOffset(2), status: 'scheduled', fresh: true,
        altText: 'Under-sink organizer with waterproof bins',
-       fileName: 'under-sink-kitchen-organization.png', imgTextKw: true,
+       fileName: 'under-sink-kitchen-organization.png', imgTextKw: true, overlayOK: true,
        desc: descFor('kitchen organization', 'Waterproof bins first, everything else second.')}),
     // …and a second pin the SAME day, to a different board. Two pins a day is a
     // normal Pinterest cadence, and the calendar shows both tiles side by side —
@@ -1278,39 +1283,41 @@ function sampleData() {
     P({title: 'Pantry labels that survive the dishwasher', keyword: 'pantry labels', format: 'standard', boardId: B['pantry-organization'].id,
        destUrl: land, planned: isoOffset(2), status: 'scheduled', fresh: true,
        altText: 'Waterproof labels on glass pantry jars',
-       fileName: 'pantry-labels-dishwasher-safe.png', imgTextKw: true,
+       fileName: 'pantry-labels-dishwasher-safe.png', imgTextKw: true, overlayOK: true,
        desc: descFor('pantry labels', 'Vinyl, not paper — they go through the dishwasher and come back readable.')}),
     P({title: 'Playroom art wall kids can reach', keyword: 'playroom ideas', format: 'standard', boardId: B['playroom-ideas'].id,
        destUrl: etsy, planned: isoOffset(4), status: 'scheduled', fresh: true,
        altText: 'Gallery ledge art wall at child height in a playroom',
-       fileName: 'DSC_0091.png', imgTextKw: false,
+       fileName: 'DSC_0091.png', imgTextKw: false, overlayOK: false,
        desc: descFor('playroom ideas', 'Ledges, not frames — swap art in seconds.')}),
     // second doubled-up day, so the pattern reads as deliberate rather than a fluke
     P({title: 'Entryway bench with hidden shoe storage', keyword: 'entryway organization', format: 'standard', boardId: B['entryway-drop-zones'].id,
        destUrl: blog, planned: isoOffset(4), status: 'scheduled', fresh: true,
        altText: 'Entryway bench with baskets of shoes tucked underneath',
-       fileName: 'entryway-organization-bench.png', imgTextKw: true,
+       fileName: 'entryway-organization-bench.png', imgTextKw: true, overlayOK: true,
        desc: descFor('entryway organization', 'The bench hides four pairs and the hooks take the rest.')}),
     P({title: 'Spring linen refresh checklist', keyword: 'linen care', format: 'standard', boardId: B['linen-care-laundry'].id,
        destUrl: blog, planned: isoOffset(6), status: 'scheduled', seasonal: seasonSpring, fresh: true,
        altText: 'Spring cleaning checklist beside folded linen',
-       fileName: 'spring-linen-care-checklist.png', imgTextKw: true,
+       fileName: 'spring-linen-care-checklist.png', imgTextKw: true, overlayOK: true,
        desc: descFor('linen care', 'Six steps, one afternoon, fresher for months.')}),
     // designed
     P({title: 'Small pantry? Steal these 5 layouts', keyword: 'pantry organization', format: 'carousel', boardId: B['pantry-organization'].id,
        destUrl: blog, planned: isoOffset(9), status: 'designed', fresh: true,
        altText: 'Five small pantry layout diagrams',
-       fileName: 'small-pantry-organization-layouts.png', imgTextKw: false,
+       fileName: 'small-pantry-organization-layouts.png', imgTextKw: false, overlayOK: false,
        desc: descFor('pantry organization', 'Five layouts drawn to scale for pantries under 1m².')}),
     P({title: 'Gift wrap station in a closet', keyword: 'gift wrap organization', format: 'standard', boardId: B['gift-wrapping-station'].id,
        destUrl: blog, planned: isoOffset(12), status: 'designed', seasonal: seasonXmas, fresh: true,
        altText: 'Closet door gift wrap organizer with rolls and ribbon',
-       fileName: 'gift-wrap-organization-closet.png', imgTextKw: true,
+       fileName: 'gift-wrap-organization-closet.png', imgTextKw: true, overlayOK: true,
        desc: descFor('gift wrap organization', 'Rolls, ribbon, tags — all on one door.')}),
     // idea backlog — a couple deliberately unscored-looking (no keyword yet)
     P({title: 'Renter-friendly kitchen upgrades', keyword: 'kitchen organization', format: 'standard', boardId: B['kitchen-storage'].id,
        destUrl: blog, planned: isoOffset(16), status: 'idea', fresh: true,
-       desc: descFor('kitchen organization', 'No drills, no lost deposits.')}),
+       /* deliberately over-written, so the unweighted over-repetition warning is
+          visible in the sample rather than only reachable by accident */
+       desc: 'Kitchen organization for renters, without the drills. These kitchen organization ideas come apart in an afternoon, and every kitchen organization fix here is deposit-safe.'}),
     P({title: 'What’s in our linen storage bags', keyword: 'linen storage', format: 'video', boardId: B['our-shop'].id,
        destUrl: etsy, planned: isoOffset(19), status: 'idea', fresh: true, desc: ''}),
     P({title: 'Toy rotation: the honest version', keyword: '', format: 'standard', boardId: B['playroom-ideas'].id,
@@ -1871,75 +1878,91 @@ function seoChecks(d, p) {
     ? Math.floor((seasonNextPeak(season) - new Date(p.planned + 'T00:00:00')) / 86400000) : null;
 
   return [
-    {w: W.kwInTitle, ok: title.includes(kw),
-      fail: 'Your keyword isn\u2019t in the pin title \u2014 the single strongest signal you can give Pinterest.',
-      pass: 'Keyword is in the title.'},
-    {w: W.kwFrontloaded, ok: title.indexOf(kw) > -1 && title.indexOf(kw) <= R.titleFrontloadIn,
-      fail: `Front-load the keyword \u2014 get it started within the first ${R.titleFrontloadIn} characters, before the feed truncates.`,
-      pass: 'Keyword is front-loaded in the title.'},
-    /* Kept deliberately, though the checklist does not carry it: without it a buyer
-       can write a 95-character title, score 100, and still lose the back half of
-       their promise to the feed's truncation. */
+    /* 1 — the sheet's item 1 is one idea: in the title, near the front. Two failure
+       modes, so the fix copy names which one you hit. */
+    {w: W.kwInTitleFront, ok: title.indexOf(kw) > -1 && title.indexOf(kw) <= R.titleFrontloadIn,
+      fail: !title.includes(kw)
+        ? 'Your keyword isn\u2019t in the pin title \u2014 the strongest signal you control.'
+        : `Your keyword is in the title but starts at character ${title.indexOf(kw)} \u2014 move it into the first ${R.titleFrontloadIn}, before the feed truncates.`,
+      pass: 'Keyword is in the title, near the front.'},
+    /* 2 */
     {w: W.titleBudget, ok: titleLen > 0 && titleLen <= R.titleFeedVisible,
       fail: titleLen === 0 ? 'The pin has no title yet.'
         : `The title is ${titleLen} characters \u2014 only about ${R.titleFeedVisible} show in the feed, so the promise gets cut off.`,
-      pass: 'Title fits the feed\u2019s visible budget.'},
+      pass: 'Title is short enough not to get cut off.'},
+    /* 3 */
     {w: W.kwFirstSentence, ok: firstSentence.includes(kw),
-      fail: 'Your keyword isn\u2019t in the first sentence of the description \u2014 Pinterest weights the opening heavily.',
+      fail: 'Your keyword isn\u2019t in the first sentence of the description \u2014 the most-skipped step on the checklist.',
       pass: 'Keyword opens the description.'},
+    /* 4 */
     {w: W.kwImageText, ok: !!p.imgTextKw, confirmed: true,
-      fail: 'Your keyword isn\u2019t written on the image itself. Pinterest reads text inside pictures \u2014 this is the highest-value thing most people never do.',
-      pass: 'Keyword is written on the image (you confirmed this).'},
+      fail: 'Your keyword isn\u2019t written on the image itself. Pinterest reads text inside pictures \u2014 this is the one nobody does.',
+      pass: 'Keyword is on the image (you confirmed this).'},
+    /* 5 — auto when a file name is typed, self-confirmed only when the field is blank */
     {w: W.kwFileName, ok: fileName ? fnAuto : !!p.fileNameKw, confirmed: !fileName,
       fail: fileName
         ? `The file name \u201c${esc(fileName)}\u201d doesn\u2019t carry the keyword \u2014 rename it small-kitchen-storage-ideas.png, not IMG_4471.png.`
-        : 'Put the keyword in the image file name \u2014 small-kitchen-storage-ideas.png, not IMG_4471.png. Type the file name here and it checks itself.',
+        : 'Put the keyword in the image file name \u2014 small-kitchen-storage-ideas.png, never IMG_4471.png. Type the file name here and it checks itself.',
       pass: fileName ? 'File name carries the keyword.' : 'Keyword is in the file name (you confirmed this).'},
-    {w: W.notOverRepeated, ok: kwCount <= R.repeatMax,
-      fail: `You\u2019ve used your keyword ${kwCount} times in the description. Once is enough here \u2014 Pinterest isn\u2019t counting, and it reads as spam.`,
-      pass: 'Keyword is used once, not repeated.'},
+    /* 6 — Pinterest offers this on standard and video pins, not on Idea pins */
+    {w: W.altText, ok: (f && f.id === 'idea') ? 'na' : !!seoNorm(p.altText),
+      fail: 'No alt text \u2014 accessibility first, and another place Pinterest reads context. Desktop: More options. Phone: Advanced Settings.',
+      pass: 'Alt text is written.',
+      na: 'Alt text \u2014 not applicable: Pinterest doesn\u2019t offer the field on Idea pins.'},
+    /* 7 */
     {w: W.relatedPhrases, ok: !rel.candidates.length ? 'na' : rel.found.length >= 1,
-      fail: 'No related phrases in the description. One or two variations \u2014 not repeats of the same keyword \u2014 are how Pinterest works out the topic.',
+      fail: 'No related phrases in the description. One or two variations \u2014 not the same keyword again \u2014 are how Pinterest works out what the pin is about.',
       pass: `Related phrases present: ${rel.found.slice(0, 2).map(esc).join(', ')}.`,
       na: 'Related phrases \u2014 nothing to check against yet. Add a few variations to the Keyword Vault or map this board to a cluster.'},
+    /* 8 */
     {w: W.boardTitle, ok: !board ? false : (seoRelated(kw, board.name) || (!!boardKw && seoRelated(boardKw, board.name))),
       fail: !board ? 'No destination board chosen \u2014 board context is a ranking signal.'
         : `Rename the board \u2014 \u201cSmall Kitchen Storage Ideas\u201d ranks, \u201c${esc(board.name)}\u201d doesn\u2019t. The board title is indexed.`,
       pass: 'Board title carries a relevant keyword.'},
+    /* 9 */
     {w: W.boardDesc, ok: !board ? false : !boardDesc ? false : (boardHasKeyword(d, board) !== false),
       fail: !board ? 'No destination board chosen, so its description can\u2019t help this pin.'
         : !boardDesc ? `\u201c${esc(board.name)}\u201d has no description. Two or three sentences with your keywords helps every pin on it, not just this one.`
         : `\u201c${esc(board.name)}\u201d has a description, but it never uses \u201c${esc(boardKw)}\u201d \u2014 the words you want it found for.`,
       pass: 'Board description is written and carries its keywords.'},
+    /* 10 */
     {w: W.destUrl, ok: (f && !f.outbound) ? 'na' : !!seoNorm(p.destUrl),
-      fail: 'No destination URL \u2014 the pin can\u2019t send anyone anywhere.',
+      fail: 'No destination URL \u2014 a pin with no link can\u2019t send traffic and can\u2019t convert.',
       pass: 'Destination URL is set.',
       na: 'Destination URL \u2014 not applicable: this format has no outbound link.'},
-    /* Alt text is real and stays. Pinterest's help article documents the field in both
-       the desktop ("More options") and mobile ("Advanced Settings") create flows, and
-       `alt_text` is on PinCreate in API v5. It is genuinely unavailable on Idea Pins —
-       that is what the N/A covers — and it cannot ride along in Pinterest's native
-       Bulk Create CSV. The copy does not claim it is indexed for search: Pinterest
-       says alt text "will only be read to people using a screen reader". */
-    {w: W.altText, ok: (f && f.id === 'idea') ? 'na' : !!seoNorm(p.altText),
-      fail: 'No alt text \u2014 it\u2019s how people using a screen reader know what your pin shows. Desktop: More options. Phone: Advanced Settings.',
-      pass: 'Alt text is written.',
-      na: 'Alt text \u2014 not applicable: Pinterest doesn\u2019t offer the field on Idea pins.'},
+    /* 11 */
     {w: W.ratio, ok: p.ratio23 !== false, confirmed: true,
-      fail: 'The image isn\u2019t 2:3 \u2014 other ratios get cropped or down-ranked in the feed.',
+      fail: 'The image isn\u2019t 2:3 \u2014 anything squarer gets cropped or compressed in the feed.',
       pass: 'Image is 2:3 (you confirmed this).'},
+    /* 12 */
+    {w: W.overlayLegible, ok: !!p.overlayOK, confirmed: true,
+      fail: 'Overlay text not confirmed legible at thumbnail size. Shrink the design to about 240px wide and look \u2014 if you can\u2019t read the headline, neither can anyone scrolling.',
+      pass: 'Overlay text reads at thumbnail size (you confirmed this).'},
+    /* 13 — the `fresh` flag already lives on every pin; this scores it */
+    {w: W.freshImage, ok: p.fresh !== false,
+      fail: 'This is a repost of an existing image. Pinterest rewards new images over recycled ones \u2014 a new image for the same URL counts as fresh.',
+      pass: 'Fresh image, not a repost.'},
+    /* 14 — evergreen pins cannot be late, so they leave the denominator entirely */
     {w: W.seasonLead, ok: !season ? 'na' : (leadDays === null ? false : leadDays >= R.seasonLeadMin),
       fail: leadDays === null
         ? `This pin is tagged ${esc((season || {}).name || 'seasonal')} but has no planned date, so its lead time can\u2019t be checked.`
-        : `Only ${leadDays} days before ${esc(season.name)} \u2014 Pinterest needs ${R.seasonLeadMin}+ days to build a season. Pull it earlier or retag it for next year.`,
+        : `Only ${leadDays} days before ${esc(season.name)} \u2014 Pinterest runs months ahead. It needs ${R.seasonLeadMin}+ days, so pull it earlier or retag it for next year.`,
       pass: `${leadDays} days ahead of ${esc((season || {}).name || '')} \u2014 inside the window.`,
       na: 'Seasonal lead time \u2014 not applicable: this is an evergreen pin, so it can\u2019t be late.'},
+
+    /* Not one of the fourteen, and deliberately unweighted: the checklist carries
+       over-repetition as a note under the keyword group rather than a numbered row,
+       so it surfaces here as a warning that never moves the score. */
+    ...(kwCount > R.repeatMax ? [{advisory: true, w: 0, ok: false,
+      fail: `You\u2019ve used your keyword ${kwCount} times in the description. Once is enough here \u2014 Pinterest isn\u2019t counting, and it reads as spam.`}] : []),
   ];
 }
 function seoScore(d, p) {
   if (!seoNorm(p.keyword)) return {score: null, band: null, checks: []};
   const checks = seoChecks(d, p);
-  const applicable = checks.filter(c => c.ok !== 'na');
+  /* advisories carry no weight and never move the score — they are guidance the
+     checklist gives in prose rather than one of its fourteen numbered rows */
+  const applicable = checks.filter(c => c.ok !== 'na' && !c.advisory);
   const earned = applicable.filter(c => c.ok === true).reduce((a, c) => a + c.w, 0);
   const total = applicable.reduce((a, c) => a + c.w, 0);
   const score = total ? Math.round(earned / total * 100) : null;
@@ -1955,11 +1978,13 @@ function seoPill(d, p) {
 function seoFixList(d, p) {
   const s = seoScore(d, p);
   if (s.score === null) return `<ul class="fixlist"><li>${icon('alert', 13)}Set a target keyword above — every SEO check keys off it.</li></ul>`;
-  const fails = s.checks.filter(c => c.ok === false);
+  const fails = s.checks.filter(c => c.ok === false && !c.advisory);
+  const advice = s.checks.filter(c => c.advisory);
   const nas = s.checks.filter(c => c.ok === 'na');
   const passes = s.checks.filter(c => c.ok === true);
   return `<ul class="fixlist" aria-label="SEO fix-list">
     ${fails.map(c => `<li>${icon('alert', 13)}<span>${c.fail} <span class="hint-edit">(+${c.w})</span></span></li>`).join('')}
+    ${advice.map(c => `<li class="na">${icon('info', 13)}<span>${c.fail} <span class="hint-edit">(doesn\u2019t affect the score)</span></span></li>`).join('')}
     ${nas.map(c => `<li class="na">${icon('info', 13)}<span>${c.na}</span></li>`).join('')}
     ${passes.map(c => `<li class="pass">${icon('check', 13)}<span>${c.pass}</span></li>`).join('')}
   </ul>`;
@@ -2305,7 +2330,7 @@ function applyImport(pv) {
       } else {
         d.pins.push({id: uid(), title: `Imported pin …${String(x.pinId).slice(-6)}`, keyword: '', format: (d.formats[0] || {id: 'standard'}).id,
           boardId: '', destUrl: '', pinUrl: x.url, planned: '', status: 'published', variant: '', seasonal: '',
-          altText: '', altText: '', imgTextKw: false, fileName: '', fileNameKw: false, desc: '', ratio23: true, fresh: true, impressions: x.impressions, impPeriod: a.period,
+          altText: '', altText: '', imgTextKw: false, overlayOK: false, fileName: '', fileNameKw: false, desc: '', ratio23: true, fresh: true, impressions: x.impressions, impPeriod: a.period,
           saves: null, pinClicks: null, outboundClicks: null, saves7: null,
           contentType: x.contentType, source: x.source, canonical: x.canonical, notes: ''});
       }
@@ -2622,7 +2647,7 @@ function runGenerator() {
     const boardId = bankHit ? bankHit.boardId
       : ((d.boards || []).find(b2 => b2.active && seoRelated(kw, boardKeyword(d, b2) + ' ' + b2.name)) || {}).id || '';
     const pseudo = {title, keyword: kw, desc, destUrl: isUrl ? content : '', boardId,
-      format: (d.formats[0] || {id: 'standard'}).id, altText: '', imgTextKw: false, fileName: '', fileNameKw: false, ratio23: true};
+      format: (d.formats[0] || {id: 'standard'}).id, altText: '', imgTextKw: false, overlayOK: false, fileName: '', fileNameKw: false, ratio23: true};
     const sc = seoScore(d, pseudo);
     return {kw, title, desc, boardId, score: sc.score, band: sc.band, tplName: tpl.name};
   });
@@ -2638,7 +2663,7 @@ function pushGeneratedToPlanner() {
     d.pins.push({id: uid(), title: g.title, keyword: g.kw, format: (d.formats[0] || {id: 'standard'}).id,
       boardId: g.boardId, destUrl: isUrl ? content : '', pinUrl: '',
       planned: isoOffset(7 + i * 3),   // staggered every 3 days from next week — fresh pins, not a dump
-      status: 'idea', variant: '', seasonal: '', altText: '', imgTextKw: false, fileName: '', fileNameKw: false, desc: g.desc, ratio23: true, fresh: true,
+      status: 'idea', variant: '', seasonal: '', altText: '', imgTextKw: false, overlayOK: false, fileName: '', fileNameKw: false, desc: g.desc, ratio23: true, fresh: true,
       impressions: null, impPeriod: '', saves: null, pinClicks: null, outboundClicks: null, saves7: null,
       contentType: '', source: '', canonical: '', notes: content && !isUrl ? `From: ${content}` : ''});
   });
@@ -4226,6 +4251,7 @@ ${ui.plannerMode === 'list' ? TILES_CARD : ''}
               <span style="font-size:12.5px"><span class="hint-edit">Image file name:</span> ${edField(`pins.${i}.fileName`, {label: 'Image file name', min: 26, ph: 'small-kitchen-storage-ideas.png'})} <span class="li-sub">typed here, it checks itself</span></span>
               <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;align-items:center">
                 <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-checkpath="pins.${i}.imgTextKw" ${p.imgTextKw ? 'checked' : ''} aria-label="Keyword is written on the image"> keyword is <strong>on the image</strong> <span class="li-sub">you confirm</span></label>
+                <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-checkpath="pins.${i}.overlayOK" ${p.overlayOK ? 'checked' : ''} aria-label="Overlay text is legible at thumbnail size"> overlay text <strong>reads at 240px</strong> <span class="li-sub">you confirm</span></label>
                 ${String(p.fileName || '').trim() ? '' : `<label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-checkpath="pins.${i}.fileNameKw" ${p.fileNameKw ? 'checked' : ''} aria-label="Keyword is in the file name"> keyword is in the <strong>file name</strong> <span class="li-sub">you confirm</span></label>`}
               </div>
               <div style="border-top:1px solid var(--hairline);padding-top:9px">
@@ -4645,7 +4671,7 @@ function listRef(name) {
 }
 const NEW_ROW = {
   pins: () => ({id: uid(), title: 'New pin', keyword: '', format: (D().formats[0] || {id: 'standard'}).id, boardId: '',
-    destUrl: '', pinUrl: '', planned: localISO(new Date()), status: 'idea', variant: '', seasonal: '', altText: '', imgTextKw: false, fileName: '', fileNameKw: false, desc: '',
+    destUrl: '', pinUrl: '', planned: localISO(new Date()), status: 'idea', variant: '', seasonal: '', altText: '', imgTextKw: false, overlayOK: false, fileName: '', fileNameKw: false, desc: '',
     ratio23: true, fresh: true, impressions: null, impPeriod: '', saves: null, pinClicks: null, outboundClicks: null,
     saves7: null, contentType: '', source: '', canonical: '', notes: ''}),
   boards: () => ({id: uid(), name: 'New board', slug: '', cluster: '', desc: '', active: true,
