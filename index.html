@@ -884,15 +884,19 @@ const PIN_SEO_RULES = {
   repeatMax: 2,           // keyword mentions in the description past which it is over-optimised
   seasonLeadMin: 45,      // a seasonal pin should be published at least this many days before its peak
   bands: {strong: 80, okay: 55},   // >=strong Strong · >=okay Okay · else Needs work
-  /* Fourteen weights for fourteen checks, in the checklist's own order and with its
-     own groupings — item 1 on the sheet is "keyword in the pin title, near the front",
-     one idea, so it is one check here rather than two. Over-repetition is NOT in this
-     list on purpose: the sheet carries it as a note under the keyword group rather than
-     a numbered row, so the engine raises it as an unweighted warning instead. */
+  /* Thirteen weights, in the checklist's order. The sheet numbers TEN checks and its
+     footer promises the planner "scores all ten automatically, plus image ratio,
+     thumbnail legibility and seasonal timing" — so ten plus those three, and nothing
+     else, is the scored set.
+
+     Two things the sheet teaches in prose rather than as numbered rows are advisories
+     here: they appear in the fix-list, carry no weight, and never move the score —
+     title length (folded into item 1's guidance) and keyword over-repetition (the note
+     under the keyword group). */
   weights: {
-    kwInTitleFront: 18, titleBudget: 5, kwFirstSentence: 10, kwImageText: 10,
-    kwFileName: 4, altText: 5, relatedPhrases: 6, boardTitle: 6, boardDesc: 4,
-    destUrl: 5, ratio: 5, overlayLegible: 5, freshImage: 5, seasonLead: 5,
+    kwInTitleFront: 18, kwFirstSentence: 10, kwImageText: 10, kwFileName: 4,
+    altText: 5, destUrlSlug: 5, relatedPhrases: 6, boardTitle: 6, boardDesc: 4,
+    freshImage: 5, ratio: 5, overlayLegible: 5, seasonLead: 5,
   },
 };
 
@@ -1330,6 +1334,14 @@ function sampleData() {
     P({title: 'Five-minute bathroom reset', keyword: 'cleaning routine', format: 'video', boardId: B['cleaning-routines'].id,
        destUrl: blog, planned: isoOffset(33), status: 'idea', fresh: true, desc: ''}),
   ];
+
+  /* Half the sample pins point at a keyword-matched slug and half do not, so the
+     URL-slug check (item 6) demonstrates both outcomes rather than a wall of red. */
+  d.pins.forEach((pin, i) => {
+    if (pin.destUrl && i % 2 === 0 && pin.keyword) {
+      pin.destUrl = 'https://willowandpine.shop/blog/' + seoWords(pin.keyword).join('-');
+    }
+  });
 
   /* --- keyword vault + research log --- */
   const kw = (term, source, intent, slug, notes = '') => ({id: uid(), term, source, intent, boardId: slug ? B[slug].id : '', notes});
@@ -1877,38 +1889,51 @@ function seoChecks(d, p) {
   const leadDays = (season && p.planned)
     ? Math.floor((seasonNextPeak(season) - new Date(p.planned + 'T00:00:00')) / 86400000) : null;
 
+  /* Item 6 changed meaning in the revised sheet: it is no longer "a URL is set" but
+     "the page you're pinning to has the keyword in its slug". That is machine-checkable,
+     so it is checked rather than confirmed. */
+  const destRaw = String(p.destUrl || '').trim();
+  let destSlug = '';
+  if (destRaw) {
+    try { destSlug = seoNorm(new URL(destRaw).pathname); }
+    catch (e) { destSlug = seoNorm(destRaw); }
+  }
+  const slugOk = !!destRaw && kwTokens.length > 0 && kwTokens.every(t => destSlug.includes(t));
+
   return [
-    /* 1 — the sheet's item 1 is one idea: in the title, near the front. Two failure
-       modes, so the fix copy names which one you hit. */
+    /* 1 — title placement. The sheet folds "short enough not to be truncated" into this
+       item's guidance rather than numbering it, so length is an advisory below. */
     {w: W.kwInTitleFront, ok: title.indexOf(kw) > -1 && title.indexOf(kw) <= R.titleFrontloadIn,
       fail: !title.includes(kw)
         ? 'Your keyword isn\u2019t in the pin title \u2014 the strongest signal you control.'
-        : `Your keyword is in the title but starts at character ${title.indexOf(kw)} \u2014 move it into the first ${R.titleFrontloadIn}, before the feed truncates.`,
+        : `Your keyword is in the title but starts at character ${title.indexOf(kw)} \u2014 move it into the first ${R.titleFrontloadIn}.`,
       pass: 'Keyword is in the title, near the front.'},
     /* 2 */
-    {w: W.titleBudget, ok: titleLen > 0 && titleLen <= R.titleFeedVisible,
-      fail: titleLen === 0 ? 'The pin has no title yet.'
-        : `The title is ${titleLen} characters \u2014 only about ${R.titleFeedVisible} show in the feed, so the promise gets cut off.`,
-      pass: 'Title is short enough not to get cut off.'},
-    /* 3 */
     {w: W.kwFirstSentence, ok: firstSentence.includes(kw),
       fail: 'Your keyword isn\u2019t in the first sentence of the description \u2014 the most-skipped step on the checklist.',
       pass: 'Keyword opens the description.'},
-    /* 4 */
+    /* 3 */
     {w: W.kwImageText, ok: !!p.imgTextKw, confirmed: true,
       fail: 'Your keyword isn\u2019t written on the image itself. Pinterest reads text inside pictures \u2014 this is the one nobody does.',
       pass: 'Keyword is on the image (you confirmed this).'},
-    /* 5 — auto when a file name is typed, self-confirmed only when the field is blank */
+    /* 4 */
     {w: W.kwFileName, ok: fileName ? fnAuto : !!p.fileNameKw, confirmed: !fileName,
       fail: fileName
         ? `The file name \u201c${esc(fileName)}\u201d doesn\u2019t carry the keyword \u2014 rename it small-kitchen-storage-ideas.png, not IMG_4471.png.`
         : 'Put the keyword in the image file name \u2014 small-kitchen-storage-ideas.png, never IMG_4471.png. Type the file name here and it checks itself.',
       pass: fileName ? 'File name carries the keyword.' : 'Keyword is in the file name (you confirmed this).'},
-    /* 6 — Pinterest offers this on standard and video pins, not on Idea pins */
+    /* 5 */
     {w: W.altText, ok: (f && f.id === 'idea') ? 'na' : !!seoNorm(p.altText),
       fail: 'No alt text \u2014 accessibility first, and another place Pinterest reads context. Desktop: More options. Phone: Advanced Settings.',
       pass: 'Alt text is written.',
       na: 'Alt text \u2014 not applicable: Pinterest doesn\u2019t offer the field on Idea pins.'},
+    /* 6 — keyword in the destination URL's slug, which helps the page rank too */
+    {w: W.destUrlSlug, ok: (f && !f.outbound) ? 'na' : slugOk,
+      fail: !destRaw
+        ? 'No destination URL \u2014 a pin with no link can\u2019t send traffic and can\u2019t convert.'
+        : `The page you\u2019re pinning to doesn\u2019t carry the keyword in its URL \u2014 \u201c${esc(destSlug || '/')}\u201d. Pinterest and Google both read the slug, and it helps your own page rank.`,
+      pass: 'Destination URL carries the keyword in its slug.',
+      na: 'Destination URL \u2014 not applicable: this format has no outbound link.'},
     /* 7 */
     {w: W.relatedPhrases, ok: !rel.candidates.length ? 'na' : rel.found.length >= 1,
       fail: 'No related phrases in the description. One or two variations \u2014 not the same keyword again \u2014 are how Pinterest works out what the pin is about.',
@@ -1926,23 +1951,17 @@ function seoChecks(d, p) {
         : `\u201c${esc(board.name)}\u201d has a description, but it never uses \u201c${esc(boardKw)}\u201d \u2014 the words you want it found for.`,
       pass: 'Board description is written and carries its keywords.'},
     /* 10 */
-    {w: W.destUrl, ok: (f && !f.outbound) ? 'na' : !!seoNorm(p.destUrl),
-      fail: 'No destination URL \u2014 a pin with no link can\u2019t send traffic and can\u2019t convert.',
-      pass: 'Destination URL is set.',
-      na: 'Destination URL \u2014 not applicable: this format has no outbound link.'},
-    /* 11 */
+    {w: W.freshImage, ok: p.fresh !== false,
+      fail: 'This is a repost of an existing image. Pinterest rewards new images over recycled ones \u2014 a new image pointing at the same URL counts as fresh.',
+      pass: 'Fresh image, not a repost.'},
+
+    /* the three the sheet's footer promises on top of its ten */
     {w: W.ratio, ok: p.ratio23 !== false, confirmed: true,
       fail: 'The image isn\u2019t 2:3 \u2014 anything squarer gets cropped or compressed in the feed.',
       pass: 'Image is 2:3 (you confirmed this).'},
-    /* 12 */
     {w: W.overlayLegible, ok: !!p.overlayOK, confirmed: true,
       fail: 'Overlay text not confirmed legible at thumbnail size. Shrink the design to about 240px wide and look \u2014 if you can\u2019t read the headline, neither can anyone scrolling.',
       pass: 'Overlay text reads at thumbnail size (you confirmed this).'},
-    /* 13 — the `fresh` flag already lives on every pin; this scores it */
-    {w: W.freshImage, ok: p.fresh !== false,
-      fail: 'This is a repost of an existing image. Pinterest rewards new images over recycled ones \u2014 a new image for the same URL counts as fresh.',
-      pass: 'Fresh image, not a repost.'},
-    /* 14 — evergreen pins cannot be late, so they leave the denominator entirely */
     {w: W.seasonLead, ok: !season ? 'na' : (leadDays === null ? false : leadDays >= R.seasonLeadMin),
       fail: leadDays === null
         ? `This pin is tagged ${esc((season || {}).name || 'seasonal')} but has no planned date, so its lead time can\u2019t be checked.`
@@ -1950,9 +1969,9 @@ function seoChecks(d, p) {
       pass: `${leadDays} days ahead of ${esc((season || {}).name || '')} \u2014 inside the window.`,
       na: 'Seasonal lead time \u2014 not applicable: this is an evergreen pin, so it can\u2019t be late.'},
 
-    /* Not one of the fourteen, and deliberately unweighted: the checklist carries
-       over-repetition as a note under the keyword group rather than a numbered row,
-       so it surfaces here as a warning that never moves the score. */
+    /* Advisories: taught in the sheet's prose, not numbered, so unweighted here. */
+    ...(titleLen > R.titleFeedVisible ? [{advisory: true, w: 0, ok: false,
+      fail: `The title is ${titleLen} characters \u2014 only about ${R.titleFeedVisible} show in the feed, so the end gets cut off.`}] : []),
     ...(kwCount > R.repeatMax ? [{advisory: true, w: 0, ok: false,
       fail: `You\u2019ve used your keyword ${kwCount} times in the description. Once is enough here \u2014 Pinterest isn\u2019t counting, and it reads as spam.`}] : []),
   ];
