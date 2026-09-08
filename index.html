@@ -279,6 +279,8 @@ table.data td{padding:8px 10px;border-bottom:1px solid var(--hairline);vertical-
 table.data tr:last-child td{border-bottom:none}
 table.data tbody tr:hover{background:var(--surface-alt)}
 table.data td.num,table.data th.num{text-align:right;font-variant-numeric:tabular-nums}
+/* number + benchmark badge is one unit — never break between them */
+table.data td.nw{white-space:nowrap}
 /* Always visible (dimmed) — hover-only reveal made delete undiscoverable on
    touch, and never revealed at all outside <tr> contexts (templates…). */
 .rowdel,.rowedit{opacity:.5;color:var(--muted);padding:2px 5px;border-radius:6px;font-size:13px;line-height:1}
@@ -860,7 +862,7 @@ function pushpinGlyph(size = 14, color = 'var(--coral)') {
    Config — every threshold lives here, one-line edits when Pinterest
    changes the rules. Nothing below is hardcoded in a view.
 ================================================================ */
-/* Pin SEO rule engine thresholds. Weights sum to 115 and the score is
+/* Pin SEO rule engine thresholds. Weights sum to 88 and the score is
    normalized to 0–100, so adding or retiring a rule never breaks the scale.
    OPEN_QUESTIONS.md carries the ask to verify limits against current
    Pinterest guidance — these are working defaults, not gospel. */
@@ -953,6 +955,41 @@ const HEALTH_RULES = {
   thinBoardPins: 5,       // fewer pins than this = thin board
   saveVelocityDays: 7,    // "saves in the first N days" — the early travel signal
 };
+
+/* ---------------- Metric hierarchy ----------------
+   Which number this planner treats as "good performance". The distinction
+   matters more than any threshold in this file, so it is stated once, here:
+
+     Outbound click rate  the business outcome. Someone left Pinterest and
+                          arrived on your site or shop. Primary by default.
+     Save rate            a DISTRIBUTION signal. Saves tell Pinterest to show
+                          the pin to more people, which grows reach over time
+                          and makes clicks compound. A leading indicator.
+     Impressions          reach. Necessary, and meaningless on its own.
+
+   Neither metric replaces the other, so both are always shown; this object
+   only decides which one LEADS. `goalDefault` is the Setup answer a buyer
+   gets before they touch anything — 'traffic' for the majority of this
+   audience (bloggers, Etsy sellers, small shops), 'reach' for accounts whose
+   goal really is growing on Pinterest itself. */
+const METRIC_PRIORITY = {
+  goalDefault: 'traffic',        // 'traffic' (outbound-primary) | 'reach' (save-primary)
+  /* Divergence flag — the insight the sample export actually contains: one
+     board/pin leads on save rate while a DIFFERENT one leads on the outbound
+     clicks that arrive somewhere. Both margins must clear their ratio before
+     it is worth interrupting anybody. Clicks are a volume, so they need the
+     bigger gap; rates are already normalized, so a smaller one is real. */
+  divergeClickRatio: 2.0,        // ×: the traffic leader's clicks vs the save leader's
+  divergeSaveRatio: 1.5,        // ×: the save leader's save rate vs the traffic leader's
+  divergeMinImpressions: 100,   // reach floor — under this, neither rate means anything
+};
+function statedGoal(d) {
+  const g = d && d.goal;
+  return (g === 'traffic' || g === 'reach') ? g : METRIC_PRIORITY.goalDefault;
+}
+/* The rate that leads every ranking, caption and tile order */
+function primaryRate(d) { return statedGoal(d) === 'reach' ? 'saveRate' : 'outboundRate'; }
+function goalIsTraffic(d) { return statedGoal(d) === 'traffic'; }
 
 /* Affinity × reach quadrant thresholds — every label below is computed from
    these two lines, nowhere else */
@@ -1054,6 +1091,7 @@ function starterData() {
   const clA = uid(), clB = uid();
   return {
     brand: {name: 'Your Brand', niche: '', url: '', owner: ''},
+    goal: METRIC_PRIORITY.goalDefault,   // 'traffic' | 'reach' — set in Setup, drives the framing everywhere
     benchmarks: {...BENCH_DEFAULTS},
     goals: [
       {id: uid(), name: 'Monthly impressions', target: 10000, actual: null, unit: ''},
@@ -1118,7 +1156,11 @@ function sampleData() {
   ];
 
   /* --- boards (~12). The two the spec calls out reproduce the real
-     contrast: high reach + tiny saves vs modest reach + strong saves. --- */
+     contrast: high reach + tiny saves vs modest reach + strong saves.
+     They also carry the divergence METRIC_PRIORITY exists for: Playroom Ideas
+     saves at 1/20th the rate of Pantry Organization and still sends 3× the
+     outbound clicks (38 vs 12). Save rate and traffic point at different
+     boards here, which is the whole reason the hierarchy is stated. --- */
   const mk = (name, cluster, desc, pinCount, lastDays, m, active = true) => ({
     id: uid(), name, slug: slugify(name), cluster, desc, active,
     pinCount, lastPinned: lastDays === null ? '' : isoOffset(-lastDays),
@@ -1426,7 +1468,10 @@ function sampleData() {
     {id: uid(), date: isoOffset(-1), kind: 'analytics', files: 2, period, note: 'Impressions + saves/outbound merged'},
     {id: uid(), date: isoOffset(-3), kind: 'audience', files: 1, period: isoOffset(-3), note: 'Total audience snapshot'},
   ];
-  d.reportNotes = 'Strong month for the pantry cluster — the label freebie is converting and the B-variant pin (labels in use) is out-saving the flatlay 2:1. Watch item: Playroom Ideas reaches far but barely saves; the pins are pretty, the promise is vague. Next month: first meal-prep board — the audience affinity is there and we have nothing pointing at it.';
+  /* This narrative used to call Playroom Ideas a watch item because it barely
+     saves — which is precisely the wrong read, and the reason the metric
+     hierarchy exists: it is the board sending the most traffic. */
+  d.reportNotes = 'Strong month for the pantry cluster — the label freebie is converting and the B-variant pin (labels in use) beats the flatlay on both clicks out and saves. The headline: Playroom Ideas sent 38 outbound clicks against Pantry Organization’s 12, even though Pantry saves at twenty times the rate. Saves are what grow the reach; the clicks are what arrive. Make more of what Playroom Ideas promises, and keep Pantry Organization pinning for the distribution it earns. Next month: first meal-prep board — the audience affinity is there and we have nothing pointing at it.';
   return d;
 }
 
@@ -1607,18 +1652,31 @@ let saveTimer = null, toastTimer = null;
 function save(countEdit) {
   if (countEdit) state.meta.edits = (state.meta.edits || 0) + 1;
   clearTimeout(saveTimer);
+  /* Remembered so the confirmation below can tell whether the caller has since said
+     something more useful than "Saved". */
+  const askedAt = Date.now();
   saveTimer = setTimeout(() => {
-    if (DEMO_LOCKED) { toast('✓ Updated — demo edits reset on refresh'); return; }
+    /* A caller that posts its own message after asking for a save has already told the
+       buyer what happened — and this toast, arriving 300ms later, used to wipe it off
+       the screen, so those actions looked like they did nothing. A failure always still
+       speaks: an unsaved file is the one thing a toast must never keep quiet about. */
+    /* >=, not >: a caller does save(true) then toast(...) in the same tick, so the two
+       timestamps land on the same millisecond. Requiring strictly-greater let the
+       generic confirmation through and wiped the real message anyway. */
+    const spoken = lastToastAt >= askedAt;
+    if (DEMO_LOCKED) { if (!spoken) toast('✓ Updated — demo edits reset on refresh'); return; }
     /* Never lead with "✓ Saved" when nothing was saved — and when the bucket is full, say so. */
     const res = storeSet(JSON.stringify(state));
     syncStorageBanner();   // the toast fades; the banner has to persist
-    toast(res === 'ok' ? '✓ Saved'
-      : res === 'full' ? '⚠ Not saved — this browser is out of storage. Back up, then clear space.'
+    if (res === 'ok') { if (!spoken) toast('✓ Saved'); return; }
+    toast(res === 'full' ? '⚠ Not saved — this browser is out of storage. Back up, then clear space.'
       : '⚠ Not saved to this device — storage is blocked, so changes last for this session only.');
   }, 300);
 }
+let lastToastAt = 0;
 function toast(msg) {
   const t = $('#toast');
+  lastToastAt = Date.now();
   t.textContent = msg;
   t.classList.add('on');
   clearTimeout(toastTimer);
@@ -1711,6 +1769,20 @@ function pinRates(d, p) {
     engRate: div(interSum, imp) === null ? null : div(interSum, imp) * 100,
   };
 }
+/* Both rates, side by side, wherever one of them is being ranked on — the
+   user has to be able to see the two disagree. 'na' stays N/A: a format with
+   no outbound link is never scored zero on a number it cannot have. */
+function bothRatesText(r) {
+  const out = r.outboundRate === 'na' ? 'N/A outbound'
+    : r.outboundRate === null ? '— outbound' : fmt.pct(r.outboundRate, 2) + ' outbound';
+  const sav = r.saveRate === null ? '— saves' : fmt.pct(r.saveRate, 2) + ' saves';
+  return out + ' · ' + sav;
+}
+/* Rankable on a rate? 'na' and null are excluded from the ORDER, not zeroed */
+function rankable(r, key) {
+  const v = r[key];
+  return v !== null && v !== 'na' && v !== undefined;
+}
 /* Daily series helpers — blank ≠ zero: a date with no value for a metric is
    simply absent from that metric's math. Charts render it as 0; averages,
    medians and streaks never see it. */
@@ -1762,16 +1834,20 @@ function deriveFresh(d) {
       saveRate: rated.length ? rated.reduce((a, p) => a + num(p.saves), 0) / rated.reduce((a, p) => a + num(p.impressions), 0) * 100 : null};
   });
 }
-/* Design-variant comparison: same title+keyword, different variant labels */
+/* Design-variant comparison: same title+keyword, different variant labels.
+   Ranked on whichever rate the buyer's stated goal makes primary — a shop
+   wants the image that sent traffic, not the one that got admired. */
 function deriveVariants(d) {
   const by = {};
+  const key = primaryRate(d);
   publishedPins(d).forEach(p => {
     if (!(p.variant || '').trim()) return;
     const k = (p.title || '').trim().toLowerCase() + '|' + (p.keyword || '').trim().toLowerCase();
     (by[k] = by[k] || []).push(p);
   });
   return Object.values(by).filter(g => g.length > 1).map(g =>
-    g.map(p => ({p, r: pinRates(d, p)})).sort((a, b) => (b.r.saveRate ?? -1) - (a.r.saveRate ?? -1)));
+    g.map(p => ({p, r: pinRates(d, p)})).sort((a, b) =>
+      (rankable(b.r, key) ? b.r[key] : -1) - (rankable(a.r, key) ? a.r[key] : -1)));
 }
 /* Board audit — inactive, thin, and no-keyword-in-description flags */
 function boardKeyword(d, b) {
@@ -1818,6 +1894,61 @@ function boardContrast(d) {
   const best = rows[0], worst = rows[rows.length - 1];
   if (best.rate < worst.rate * 3) return null;   // only call it out when it's dramatic
   return {best, worst};
+}
+
+/* ---------------- Divergence: when the two metrics disagree ----------------
+   The most useful thing this planner can say. Saves and outbound clicks
+   answer different questions, and a real export proves they can point at
+   different content: in the sample, Playroom Ideas saves at a twentieth of
+   Pantry Organization's rate and still sends more than 3× the traffic.
+
+   Takes rows of {label, impressions, saveRate, outRate, clicks} and returns
+   the pair worth naming, or null when the two metrics agree (nothing to say)
+   or when either margin is too small to act on. Rows whose outbound is 'na'
+   — a format with no outbound link — are dropped, never scored as zero. */
+function metricDivergence(rows) {
+  const R = METRIC_PRIORITY;
+  const ok = (rows || []).filter(r => num(r.impressions) !== null
+    && num(r.impressions) >= R.divergeMinImpressions
+    && r.saveRate !== null && r.outRate !== null && r.outRate !== 'na' && num(r.clicks) !== null);
+  if (ok.length < 2) return null;
+  const saver = [...ok].sort((a, b) => b.saveRate - a.saveRate)[0];
+  const clicker = [...ok].sort((a, b) => b.clicks - a.clicks)[0];
+  if (saver === clicker) return null;             // the metrics agree — no insight here
+  const clickLead = div(clicker.clicks, saver.clicks);
+  const saveLead = div(saver.saveRate, clicker.saveRate);
+  if (clickLead === null || saveLead === null) return null;
+  if (clickLead < R.divergeClickRatio || saveLead < R.divergeSaveRatio) return null;
+  return {clicker, saver, clickLead, saveLead};
+}
+function boardDivergence(d) {
+  return metricDivergence((d.boards || []).filter(b => b.active && b.m).map(b => ({
+    label: b.name, b,
+    impressions: num(b.m.impressions),
+    saveRate: div(num(b.m.saves), num(b.m.impressions)) === null ? null : div(num(b.m.saves), num(b.m.impressions)) * 100,
+    outRate: div(num(b.m.outboundClicks), num(b.m.impressions)) === null ? null : div(num(b.m.outboundClicks), num(b.m.impressions)) * 100,
+    clicks: num(b.m.outboundClicks),
+  })));
+}
+function pinDivergence(d) {
+  return metricDivergence(publishedPins(d).map(p => {
+    const r = pinRates(d, p);
+    return {label: p.title, p, impressions: num(p.impressions),
+      saveRate: r.saveRate, outRate: r.outboundRate, clicks: num(p.outboundClicks)};
+  }));
+}
+/* One sentence of advice, and it changes with the buyer's stated goal — the
+   same two numbers mean different things to a shop and to a growth account. */
+function divergenceHTML(d, dv, unit) {
+  const pc = v => fmt.pct(v, 2);
+  const clicker = esc(dv.clicker.label), saver = esc(dv.saver.label);
+  return `<strong>${clicker} gets ${fmt.num(dv.clickLead, 1)}× the outbound clicks of ${saver} despite a ${fmt.num(dv.saveLead, 1)}× lower save rate.</strong>
+    ${clicker}: ${pc(dv.clicker.outRate)} outbound, ${pc(dv.clicker.saveRate)} saves ·
+    ${saver}: ${pc(dv.saver.outRate)} outbound, ${pc(dv.saver.saveRate)} saves.
+    Saves grow your reach on Pinterest; outbound clicks bring people to you.
+    ${goalIsTraffic(d)
+      ? `Traffic is the goal you set, so <strong>${clicker}</strong> is the ${unit} to make more of — keep ${saver} for the reach its saves keep building.`
+      : `Growing on Pinterest is the goal you set, so <strong>${saver}</strong> is the ${unit} to make more of — but ${clicker} is the one actually sending people to you.`}`;
 }
 
 /* ================================================================
@@ -1976,6 +2107,61 @@ function seoChecks(d, p) {
       fail: `You\u2019ve used your keyword ${kwCount} times in the description. Once is enough here \u2014 Pinterest isn\u2019t counting, and it reads as spam.`}] : []),
   ];
 }
+
+/* The thirteen scored rows above are returned in PIN_SEO_RULES.weights order, with the
+   unweighted advisories appended last. Keying them here lets callers ask "which of
+   these does the copy control?" without matching on wording. Keep this list in step
+   with the weights object. */
+const SEO_CHECK_KEYS = ['kwInTitleFront', 'kwFirstSentence', 'kwImageText', 'kwFileName',
+  'altText', 'destUrlSlug', 'relatedPhrases', 'boardTitle', 'boardDesc', 'freshImage',
+  'ratio', 'overlayLegible', 'seasonLead'];
+function seoKeyedChecks(d, p) {
+  let i = 0;
+  return seoChecks(d, p).map(c => c.advisory ? c : {...c, key: SEO_CHECK_KEYS[i++]});
+}
+
+/* ── copy score ──────────────────────────────────────────────────────────────
+   Four of the thirteen checks are things only the finished IMAGE can answer: whether
+   the keyword is written on it, its file name, its alt text, whether the overlay reads
+   at thumbnail size. That is 24 of the 88 points, and none of it can be known while
+   the copy is still being written — so scoring fresh copy against them caps it in the
+   amber band however good the words are, which is why the metadata generator used to
+   report "okay" for copy that had earned everything available to it.
+
+   Note that nothing here reads p.img: attaching a picture does not move the score.
+   These are the buyer's own confirmations, made in the pin drawer. Say "confirm on the
+   pin", never "attach an image", or the note sends people to a control with no effect. */
+const SEO_COPY_KEYS = ['kwInTitleFront', 'kwFirstSentence', 'destUrlSlug',
+                       'relatedPhrases', 'boardTitle', 'boardDesc'];
+function seoCopyScore(d, p) {
+  const rows = seoKeyedChecks(d, p)
+    .filter(c => !c.advisory && c.ok !== 'na' && SEO_COPY_KEYS.includes(c.key));
+  const total = rows.reduce((a, c) => a + c.w, 0);
+  const earned = rows.filter(c => c.ok === true).reduce((a, c) => a + c.w, 0);
+  const score = total ? Math.round(earned / total * 100) : null;
+  const B = PIN_SEO_RULES.bands;
+  return {score, earned, total, checks: rows,
+          band: score === null ? null : score >= B.strong ? 'strong' : score >= B.okay ? 'okay' : 'weak'};
+}
+/* What is still on the table, split so the note can name each cause separately. A pin
+   with no board loses 10; one with no design confirmations loses 24. */
+function seoPendingBreakdown(d, p) {
+  const fails = seoKeyedChecks(d, p).filter(c => !c.advisory && c.ok === false);
+  const sum = keys => fails.filter(c => keys.includes(c.key)).reduce((a, c) => a + c.w, 0);
+  return {board: sum(['boardTitle', 'boardDesc']),
+          design: sum(['kwImageText', 'kwFileName', 'altText', 'overlayLegible', 'freshImage', 'ratio']),
+          link: sum(['destUrlSlug'])};
+}
+function seoImagePending(d, p) { return seoPendingBreakdown(d, p).design; }
+/* One short phrase for the places that show a score without room for the fix-list. */
+function seoPendingNote(d, p) {
+  const b = seoPendingBreakdown(d, p);
+  const bits = [];
+  if (b.board) bits.push(`+${b.board} once you pick a board`);
+  if (b.design) bits.push(`+${b.design} to confirm on the pin`);
+  if (b.link) bits.push(`+${b.link} for a keyword in the link`);
+  return bits.join(' · ');
+}
 function seoScore(d, p) {
   if (!seoNorm(p.keyword)) return {score: null, band: null, checks: []};
   const checks = seoChecks(d, p);
@@ -1988,21 +2174,40 @@ function seoScore(d, p) {
   const band = score === null ? null : score >= PIN_SEO_RULES.bands.strong ? 'strong' : score >= PIN_SEO_RULES.bands.okay ? 'okay' : 'weak';
   return {score, band, checks};
 }
+/* The number a buyer sees is the COPY score: what the words and the board control. The
+   whole-pin score is right for finished pins and wrong as a headline, because a pin that
+   has not been designed yet cannot answer four of the checks and so can never read green
+   — it looked like the planner marking good copy down for no stated reason. Whatever is
+   outstanding is named beside the number rather than left to be inferred. */
 function seoPill(d, p) {
-  const s = seoScore(d, p);
+  const s = seoCopyScore(d, p);
   if (s.score === null) return '<span class="chip neutral sample-chip" title="Set a target keyword — every SEO check keys off it">no keyword</span>';
   const bandName = {strong: 'Strong', okay: 'Okay', weak: 'Needs work'}[s.band];
-  return `<span class="seoscore ss-${s.band}" title="Pin SEO: ${bandName}. Open the row for the fix-list."><span class="ss-n">${s.score}</span><span class="ss-bar"><i style="width:${s.score}%"></i></span></span>`;
+  const pending = seoPendingNote(d, p);
+  const full = seoScore(d, p).score;
+  return `<span class="seoscore ss-${s.band}" title="Copy: ${bandName} — ${s.earned} of the ${s.total} points the words and the board control. Whole pin, every check: ${full}. Open the row for the fix-list."><span class="ss-n">${s.score}</span><span class="ss-bar"><i style="width:${s.score}%"></i></span></span>`
+    + `<span class="hint-edit" style="font-size:11px;margin-left:5px">copy${pending ? ' · ' + esc(pending) : ''}</span>`;
 }
 function seoFixList(d, p) {
-  const s = seoScore(d, p);
+  const s = {...seoScore(d, p), checks: seoKeyedChecks(d, p)};
   if (s.score === null) return `<ul class="fixlist"><li>${icon('alert', 13)}Set a target keyword above — every SEO check keys off it.</li></ul>`;
   const fails = s.checks.filter(c => c.ok === false && !c.advisory);
   const advice = s.checks.filter(c => c.advisory);
   const nas = s.checks.filter(c => c.ok === 'na');
   const passes = s.checks.filter(c => c.ok === true);
+  /* Three causes, and they are not the same kind of work: copy you can fix now, a board
+     you can pick now, and four things only the finished design can answer. Grouping them
+     is the difference between "your score is 65" and "here is why, and whose job it is". */
+  const DESIGN = ['kwImageText', 'kwFileName', 'altText', 'overlayLegible', 'freshImage', 'ratio'];
+  const BOARD = ['boardTitle', 'boardDesc'];
+  const group = (rows, label) => rows.length
+    ? `<li class="na" style="font-weight:700;color:var(--ink)">${esc(label)}</li>`
+      + rows.map(c => `<li>${icon('alert', 13)}<span>${c.fail} <span class="hint-edit">(+${c.w})</span></span></li>`).join('')
+    : '';
   return `<ul class="fixlist" aria-label="SEO fix-list">
-    ${fails.map(c => `<li>${icon('alert', 13)}<span>${c.fail} <span class="hint-edit">(+${c.w})</span></span></li>`).join('')}
+    ${group(fails.filter(c => !DESIGN.includes(c.key) && !BOARD.includes(c.key)), 'Fix the copy')}
+    ${group(fails.filter(c => BOARD.includes(c.key)), 'Needs a board')}
+    ${group(fails.filter(c => DESIGN.includes(c.key)), 'Needs your design — confirm these once you\u2019ve made the image')}
     ${advice.map(c => `<li class="na">${icon('info', 13)}<span>${c.fail} <span class="hint-edit">(doesn\u2019t affect the score)</span></span></li>`).join('')}
     ${nas.map(c => `<li class="na">${icon('info', 13)}<span>${c.na}</span></li>`).join('')}
     ${passes.map(c => `<li class="pass">${icon('check', 13)}<span>${c.pass}</span></li>`).join('')}
@@ -2642,13 +2847,25 @@ function seasonWarnings(d) {
    Bulk pin metadata generator — template × keyword substitution,
    each result pre-scored by the SEO engine. No AI, no network.
 ================================================================ */
-function genFill(tpl, kw, benefit) {
+function genFill(tpl, kw, benefit, related) {
   const cap = kw.charAt(0).toUpperCase() + kw.slice(1);
   const sub = str => String(str || '')
     .replace(/(^|[.!?]\s+)\{keyword\}/g, (m2, p2) => p2 + cap)   // sentence starts get capitalized
     .replace(/\{keyword\}/g, kw)
-    .replace(/\{benefit\}/g, benefit || 'results you can see');
+    .replace(/\{benefit\}/g, benefit || 'results you can see')
+    .replace(/\{related\}/g, related || '');
   return {title: sub(tpl.title), desc: sub(tpl.desc)};
+}
+/* A description that never varies its wording forfeits the related-phrases check — six
+   points, and it failed on every pin the generator had ever written, because none of
+   the templates carry a variation. Templates may place {related} themselves; if they
+   don't, one sentence carrying the phrase is appended, which also fixes the templates
+   buyers wrote before this existed. */
+function genWeaveRelated(desc, related) {
+  if (!related) return desc;
+  if (seoNorm(desc).includes(seoNorm(related))) return desc;
+  const sep = /[.!?]\s*$/.test(desc.trim()) ? ' ' : '. ';
+  return desc.trim() + sep + 'Worth a look if you\u2019re planning ' + related + ' too.';
 }
 function runGenerator() {
   const d = D();
@@ -2660,41 +2877,32 @@ function runGenerator() {
   if (!tpl) { toast('Add a template first'); return; }
   const isUrl = /^https?:\/\//i.test(content);
   ui.genOut = keywords.map(kw => {
-    const {title, desc} = genFill(tpl, kw, benefit);
     // score against the board the keyword bank maps this keyword to (fuzzy fallback)
     const bankHit = (d.keywords || []).find(k => k.boardId && seoRelated(kw, k.term));
     const boardId = bankHit ? bankHit.boardId
       : ((d.boards || []).find(b2 => b2.active && seoRelated(kw, boardKeyword(d, b2) + ' ' + b2.name)) || {}).id || '';
-    const pseudo = {title, keyword: kw, desc, destUrl: isUrl ? content : '', boardId,
-      format: (d.formats[0] || {id: 'standard'}).id, altText: '', imgTextKw: false, overlayOK: false, fileName: '', fileNameKw: false, ratio23: true};
-    const sc = seoScore(d, pseudo);
-    return {kw, title, desc, boardId, score: sc.score, band: sc.band, tplName: tpl.name};
+    const base = {keyword: kw, destUrl: isUrl ? content : '', boardId,
+      format: (d.formats[0] || {id: 'standard'}).id, altText: '', imgTextKw: false,
+      overlayOK: false, fileName: '', fileNameKw: false, ratio23: true};
+
+    /* Ask the scorer which variations it would accept for THIS keyword and board, then
+       write one in. Picking from its own pool is the only way the check can pass, and a
+       generator whose job is writing copy should not be losing copy points. */
+    const first = genFill(tpl, kw, benefit, '');
+    const pool = seoRelatedPhrases(d, {...base, title: first.title, desc: first.desc}).candidates;
+    const related = pool[0] || '';
+    const {title, desc: filled} = genFill(tpl, kw, benefit, related);
+    const desc = genWeaveRelated(filled, related);
+
+    const pseudo = {...base, title, desc};
+    const copy = seoCopyScore(d, pseudo);
+    return {kw, title, desc, boardId, related, tplName: tpl.name,
+            /* `score` is the COPY score — what this card reports on. The whole-pin
+               number belongs to the planner, once the pin has a design. */
+            score: copy.score, band: copy.band, earned: copy.earned, total: copy.total,
+            pending: seoPendingNote(d, pseudo), fullScore: seoScore(d, pseudo).score};
   });
   render();
-}
-function pushGeneratedToPlanner() {
-  const d = D();
-  const out = ui.genOut || [];
-  if (!out.length) return;
-  const content = (ui.genContent || '').trim();
-  const isUrl = /^https?:\/\//i.test(content);
-  out.forEach((g, i) => {
-    d.pins.push({id: uid(), title: g.title, keyword: g.kw, format: (d.formats[0] || {id: 'standard'}).id,
-      boardId: g.boardId, destUrl: isUrl ? content : '', pinUrl: '',
-      planned: isoOffset(7 + i * 3),   // staggered every 3 days from next week — fresh pins, not a dump
-      status: 'idea', variant: '', seasonal: '', altText: '', imgTextKw: false, overlayOK: false, fileName: '', fileNameKw: false, desc: g.desc, ratio23: true, fresh: true,
-      impressions: null, impPeriod: '', saves: null, pinClicks: null, outboundClicks: null, saves7: null,
-      contentType: '', source: '', canonical: '', notes: content && !isUrl ? `From: ${content}` : ''});
-  });
-  const n = out.length;
-  ui.genOut = null;
-  save(true);
-  ui.view = 'planner';
-  ui.filterPins = 'all'; // the drafts land as ideas — an active status filter must not hide them
-  try { history.replaceState(null, '', '#planner'); } catch (e) {}
-  animPending = true;
-  render();
-  toast(`✓ ${n} draft pin${n === 1 ? '' : 's'} added to the planner, staggered every 3 days`);
 }
 function copyText(text) {
   const done = () => toast('✓ Copied — paste it into Pinterest');
@@ -2948,7 +3156,13 @@ function boardCardHTML(d, b, i) {
   const cl = clusterById(d, b.cluster);
   const since = daysSince(b.lastPinned);
   const saveR = b.m && num(b.m.saves) !== null && num(b.m.impressions) > 0 ? num(b.m.saves) / num(b.m.impressions) * 100 : null;
+  const outR = b.m && num(b.m.outboundClicks) !== null && num(b.m.impressions) > 0 ? num(b.m.outboundClicks) / num(b.m.impressions) * 100 : null;
   const bench = num(d.benchmarks.saveRate);
+  const benchOut = num(d.benchmarks.outboundRate);
+  /* Both stats always print; the buyer's stated goal only decides which sits
+     first, next to impressions. */
+  const savesStat = `<span>Saves<b>${b.m && num(b.m.saves) !== null ? fmt.int(b.m.saves) + (saveR !== null && bench !== null && saveR >= bench ? ' <span class="bench up">↑</span>' : '') : '—'}</b></span>`;
+  const outStat = `<span>Outbound<b>${b.m && num(b.m.outboundClicks) !== null ? fmt.int(b.m.outboundClicks) + (outR !== null && benchOut !== null && outR >= benchOut ? ' <span class="bench up">↑</span>' : '') : '—'}</b></span>`;
   const period = latestImportPeriod(d);
   const noData = period && b.active && (!b.m || b.mPeriod !== period);
   return `<article class="bcard ${b.active ? '' : 'bc-off'}">
@@ -2964,8 +3178,7 @@ function boardCardHTML(d, b, i) {
       </div>
       <div class="bc-stats">
         <span>Impressions<b>${b.m && num(b.m.impressions) !== null ? fmt.int(b.m.impressions) : '—'}</b></span>
-        <span>Saves<b>${b.m && num(b.m.saves) !== null ? fmt.int(b.m.saves) + (saveR !== null && bench !== null && saveR >= bench ? ' <span class="bench up">↑</span>' : '') : '—'}</b></span>
-        <span>Outbound<b>${b.m && num(b.m.outboundClicks) !== null ? fmt.int(b.m.outboundClicks) : '—'}</b></span>
+        ${goalIsTraffic(d) ? outStat + savesStat : savesStat + outStat}
       </div>
     </div>
     <div class="bc-tools">
@@ -3312,9 +3525,12 @@ const VIEWS = [
   {id: 'traffic',     label: 'Traffic & Conversion',              group: 'Analyze',           icon: 'funnel'},
   {id: 'report',      label: 'Goals, Benchmarks & Client Report', group: 'Report',            icon: 'file'},
 ];
+/* `topSort` and `perfSort` start null on purpose: null means "follow the goal
+   set in Setup", so switching that one answer re-points every ranking. Once
+   the buyer picks a sort by hand, their choice sticks for the session. */
 const ui = {view: 'home', filterPins: 'all', pinSort: 'planned', openPin: null, openBoard: null,
   plannerMode: 'cal', calRef: monthKey(),
-  perfFmt: 'all', perfCanon: 'all', perfSort: 'impressions', addModal: null,
+  perfFmt: 'all', perfCanon: 'all', perfSort: null, topSort: null, addModal: null,
   importPreview: null, genOut: null, audSort: 'affinity', audIntSort: 'affinity', audSnap: 'latest'};
 
 (function initRoute() {
@@ -3428,6 +3644,14 @@ function viewStart() {
       </div></section>
 
     <section class="card c4">
+      ${cardH('spark', 'Saves and clicks measure different things', '', 'teal')}
+      <div class="card-b">
+        <p style="margin:0 0 8px">A <strong>save</strong> means Pinterest will show your pin to more people — it grows your reach. An <strong>outbound click</strong> means someone actually came to your site.</p>
+        <p style="margin:0 0 8px">If your goal is traffic, watch outbound clicks and treat saves as the thing that makes them compound. <strong>A pin can be strong on one and weak on the other.</strong></p>
+        <p style="margin:0;color:var(--muted);font-size:12.5px">Tell the planner which one you're here for in <strong>Setup</strong> — it ranks everything on that number and always shows you both.</p>
+      </div></section>
+
+    <section class="card c4">
       ${cardH('sliders', 'What you type, what it works out')}
       <div class="card-b">
         <p style="margin:0 0 8px"><span class="ed-demo">like this</span> &nbsp;is yours to type in — click it and start typing.</p>
@@ -3460,8 +3684,28 @@ function viewHome() {
   const stats = dailyStats(d, 'impressions');
   const stats7 = dailyStats(d, 'impressions', 7);
   const impSeries = dailySeries(d, 'impressions');
-  const rated = publishedPins(d).map(p => ({p, r: pinRates(d, p)})).filter(x => x.r.saveRate !== null);
-  const top3 = rated.sort((a, b) => b.r.saveRate - a.r.saveRate).slice(0, 3);
+  /* Top Performers — ranked on the number the buyer's goal makes primary,
+     which by default is the outbound click rate, because that is the one that
+     puts somebody on their site. Both rates print on every row so a pin that
+     is strong on one and weak on the other is visible, not hidden by the sort.
+     Formats with no outbound link fall out of the outbound ranking entirely
+     (rankable()); they are never scored 0%. */
+  const topSort = ui.topSort || primaryRate(d);
+  const topPool = publishedPins(d).map(p => ({p, r: pinRates(d, p)}));
+  const top3 = (topSort === 'impressions'
+    ? topPool.filter(x => num(x.p.impressions) !== null)
+        .sort((a, b) => num(b.p.impressions) - num(a.p.impressions))
+    : topPool.filter(x => rankable(x.r, topSort))
+        .sort((a, b) => b.r[topSort] - a.r[topSort])).slice(0, 3);
+  const TOP_SORTS = [
+    ['outboundRate', 'Outbound rate', 'by outbound click rate — the number that sends you traffic'],
+    ['saveRate', 'Save rate', 'by save rate — the signal that grows your reach'],
+    ['impressions', 'Impressions', 'by impressions — reach, before anyone did anything'],
+  ];
+  const topCaption = (TOP_SORTS.find(s2 => s2[0] === topSort) || TOP_SORTS[0])[2];
+  const topPrimary = x => topSort === 'impressions' ? fmt.compact(x.p.impressions) + ' impressions'
+    : topSort === 'saveRate' ? fmt.pct(x.r.saveRate, 2) + ' save rate'
+    : fmt.pct(x.r.outboundRate, 2) + ' outbound rate';
   const snap = audLatest(d);
   const hasSnap = snap && !snap.notEnough;
   const lead = hasSnap && snap.device.length ? snap.device.reduce((a, x) => x.pct > a.pct ? x : a, snap.device[0]) : null;
@@ -3476,9 +3720,15 @@ function viewHome() {
   const up = (d.pins || []).filter(p => p.status !== 'published' && p.planned && daysUntil(p.planned) >= 0)
     .sort((a, b) => (a.planned || '9999').localeCompare(b.planned || '9999'));
   const feed = [...up, ...publishedPins(d)].slice(0, 10);
-  const railSub = p => p.status === 'published'
-    ? (num(p.impressions) !== null ? `${fmt.compact(p.impressions)} impr${num(p.saves) !== null ? ' · ' + fmt.int(p.saves) + ' saves' : ''}` : 'published')
-    : `${relDay(p.planned)} · ${p.status}`;
+  /* Second stat on the rail is whichever one the buyer came here for */
+  const railSub = p => {
+    if (p.status !== 'published') return `${relDay(p.planned)} · ${p.status}`;
+    if (num(p.impressions) === null) return 'published';
+    const lead = goalIsTraffic(d)
+      ? (num(p.outboundClicks) !== null ? ' · ' + fmt.int(p.outboundClicks) + ' clicks out' : '')
+      : (num(p.saves) !== null ? ' · ' + fmt.int(p.saves) + ' saves' : '');
+    return `${fmt.compact(p.impressions)} impr${lead}`;
+  };
 
   // keyword targeting: each cluster's coverage state at a glance
   const kwState = c => {
@@ -3536,18 +3786,26 @@ function viewHome() {
     </section>
 
     <section class="card c6" aria-label="Top performers">
-      ${cardH('flame', 'Top Performers', 'by save rate — the number Pinterest rewards', 'coral')}
-      ${top3.length ? `<div class="card-b">
+      ${cardH('flame', 'Top Performers', esc(topCaption), 'coral')}
+      <div class="filters noprint" style="padding:8px 16px">
+        <span style="font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);font-weight:700">Rank by</span>
+        <div role="group" aria-label="Rank top performers by" style="display:inline-flex;border:1px solid var(--teal);border-radius:999px;overflow:hidden;background:var(--surface)">
+          ${TOP_SORTS.map(([k, l2]) => `<button data-action="topsort" data-sort="${k}" aria-pressed="${topSort === k}"
+            style="padding:5px 11px;font-size:11.5px;font-weight:600;${topSort === k ? 'background:var(--ink);color:var(--page)' : 'color:var(--teal-deep)'}">${l2}</button>`).join('')}
+        </div>
+      </div>
+      ${top3.length ? `<div class="card-b" style="padding-top:10px">
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
-          ${top3.map(({p, r}) => `<span style="min-width:0">
-            ${pinThumbHTML(d, p, {size: 'rail', tools: false, sub: fmt.pct(r.saveRate, 2) + ' save rate'})}
+          ${top3.map(x => `<span style="min-width:0">
+            ${pinThumbHTML(d, x.p, {size: 'rail', tools: false, sub: topPrimary(x)})}
             <span style="display:block;font-size:10.5px;margin-top:4px;line-height:1.35;min-width:0">
-              <strong style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.title)}</strong>
-              <span class="li-sub">${num(p.impressions) !== null ? fmt.compact(p.impressions) + ' impressions' : (boardById(d, p.boardId) || {}).name || ''}</span>
+              <strong style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(x.p.title)}</strong>
+              <span class="li-sub" style="display:block;font-variant-numeric:tabular-nums">${esc(bothRatesText(x.r))}</span>
+              <span class="li-sub" style="display:block">${num(x.p.impressions) !== null ? fmt.compact(x.p.impressions) + ' impressions' : (boardById(d, x.p.boardId) || {}).name || ''}</span>
             </span></span>`).join('')}
         </div>
       </div>`
-      : `<div class="emptystate">Log saves on a few published pins and your winners line up here.</div>`}
+      : `<div class="emptystate">Log outbound clicks and saves on a few published pins and your winners line up here.</div>`}
     </section>
 
     <section class="card c6" aria-label="Keywords and audience">
@@ -3597,7 +3855,7 @@ function viewHome() {
           <span style="width:86px;flex:0 0 auto">${boardCollageHTML(d, b)}</span>
           <span style="flex:1;min-width:0">
             <div style="font-weight:700;font-family:var(--display);font-size:13px;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(b.name)}</div>
-            <div class="li-sub" style="font-variant-numeric:tabular-nums">${fmt.int(b.m.impressions)} impr · ${num(b.m.saves) !== null ? fmt.int(b.m.saves) + ' saves' : '—'}</div>
+            <div class="li-sub" style="font-variant-numeric:tabular-nums">${fmt.int(b.m.impressions)} impr · ${num(b.m.outboundClicks) !== null ? fmt.int(b.m.outboundClicks) + ' out' : '—'} · ${num(b.m.saves) !== null ? fmt.int(b.m.saves) + ' saves' : '—'}</div>
           </span></div>`).join('')}
       </div>`
       : `<div class="emptystate">Board metrics arrive with your first CSV import.</div>`}
@@ -3606,8 +3864,35 @@ function viewHome() {
 }
 function viewSetup() {
   const d = D();
-  return viewHead('Setup & Brand Profile', 'Your brand, keyword clusters, goals and benchmark targets — everything downstream reads from here.') + `
+  const goal = statedGoal(d);
+  /* One answer, two genuinely different users. A shop or blog wants people OFF
+     Pinterest and onto their site, so outbound click rate leads. An account
+     growing reach and followers wants save rate to lead. Every ranking,
+     caption and tile order downstream reads this. */
+  const GOAL_OPTS = [
+    ['traffic', 'Driving traffic', 'to my site, shop or blog',
+     'Outbound click rate leads every ranking; saves stay visible as the reach they build.'],
+    ['reach', 'Growing on Pinterest', 'reach, followers, brand awareness',
+     'Save rate leads every ranking; outbound clicks stay visible as the traffic they send.'],
+  ];
+  return viewHead('Setup & Brand Profile', 'Your brand, what Pinterest is for, keyword clusters, goals and benchmark targets — everything downstream reads from here.') + `
   <div class="grid">
+    <section class="card" aria-label="What Pinterest is for">
+      ${cardH('target', 'What is Pinterest for, for you?', 'this one answer re-points the whole planner', 'teal')}
+      <div class="card-b">
+        <div role="radiogroup" aria-label="What is Pinterest for, for you?" style="display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
+          ${GOAL_OPTS.map(([k, title, sub, effect]) => `<label style="display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border:1px solid ${goal === k ? 'var(--teal)' : 'var(--hairline)'};border-radius:12px;cursor:pointer;background:${goal === k ? 'var(--teal-soft)' : 'var(--surface)'}">
+            <input type="radio" name="pinGoal" value="${k}" data-goalpick="1" ${goal === k ? 'checked' : ''} style="margin-top:2px;flex:0 0 auto">
+            <span style="min-width:0">
+              <span style="display:block;font-weight:700;font-family:var(--display);font-size:14px;letter-spacing:-.01em">${title}${k === METRIC_PRIORITY.goalDefault ? ' <span class="chip neutral sample-chip" style="vertical-align:middle">default</span>' : ''}</span>
+              <span class="li-sub" style="display:block">${sub}</span>
+              <span class="li-sub" style="display:block;margin-top:5px">${effect}</span>
+            </span></label>`).join('')}
+        </div>
+        <p class="hint-edit" style="margin:10px 0 0">Neither number is being hidden. Both rates print side by side everywhere they are ranked on — this only decides which one leads.</p>
+      </div>
+    </section>
+
     <section class="card c6">
       ${cardH('sliders', 'Brand profile', '', 'coral')}
       <div class="card-b">
@@ -3625,8 +3910,11 @@ function viewSetup() {
       ${cardH('gauge', 'Benchmark targets', 'yours to tune', 'aqua')}
       <div class="card-b flush">
         ${[
-          ['saveRate', 'Save rate', 'saves ÷ impressions', '%'],
-          ['outboundRate', 'Outbound rate', 'clicks out ÷ impressions', '%'],
+          ...(goalIsTraffic(d)
+            ? [['outboundRate', 'Outbound rate', 'clicks out ÷ impressions — your primary number', '%'],
+               ['saveRate', 'Save rate', 'saves ÷ impressions — the reach that makes clicks compound', '%']]
+            : [['saveRate', 'Save rate', 'saves ÷ impressions — your primary number', '%'],
+               ['outboundRate', 'Outbound rate', 'clicks out ÷ impressions — the traffic those saves send', '%']]),
           ['engRate', 'Engagement rate', 'all engagement ÷ impressions', '%'],
           ['freshRatio', 'Fresh-pin ratio', 'new images ÷ published pins', '%'],
           ['weeklyPins', 'Pins per week', 'your own pace, not a rule', ''],
@@ -3855,24 +4143,38 @@ function viewVault() {
             <button class="btn btn-primary" data-action="gen-run">${icon('wand', 14)}Generate</button>
             ${out ? `<button class="btn btn-ghost" data-action="gen-clear">Clear results</button>` : ''}
           </div>
+          ${(() => {
+            /* The dropdown was a list of names with no stated source. Say where they live,
+               and show the sentence this one is about to write, so it is a choice. */
+            const t = (d.templates || []).find(x => x.id === ui.genTpl) || (d.templates || [])[0];
+            if (!t) return `<span class="hint-edit">No templates yet — add one in <b>Title &amp; description templates</b> below.</span>`;
+            return `<div class="sparse" style="margin:0">${icon('info', 13)}<span>These are your own wordings, from
+              <b>Title &amp; description templates</b> further down this page — edit them there and the generator follows.
+              <b>${esc(t.name)}</b> writes: <i>&ldquo;${esc(t.title)}&rdquo;</i> — ${esc(String(t.desc || '').slice(0, 96))}…</span></div>`;
+          })()}
         </div>
       </div>
       ${out ? `
       <div class="card-h" style="border-top:1px solid var(--hairline)">${icon('check', 15)}<h3>${out.length} pins written &amp; scored</h3>
-        <span class="h-aux"><button class="btn btn-primary" data-action="gen-push">${icon('plus', 13)}Add all to Pin Planner as drafts</button></span></div>
+        <span class="h-aux hint-edit">plan them one at a time — you choose the board and the date</span></div>
       <div>
         ${out.map((g, i) => `<div class="genrow">
           <div class="gr-top">
             <span class="gr-kw">${esc(g.kw)}</span>
-            ${g.score !== null ? `<span class="seoscore ss-${g.band}"><span class="ss-n">${g.score}</span><span class="ss-bar"><i style="width:${g.score}%"></i></span></span>` : ''}
+            ${g.score !== null ? `<span class="seoscore ss-${g.band}" title="Copy score \u2014 ${g.earned} of the ${g.total} points the words themselves control.${g.pending ? ' Still pending: ' + g.pending + '.' : ''}"><span class="ss-n">${g.score}</span><span class="ss-bar"><i style="width:${g.score}%"></i></span></span><span class="hint-edit" style="font-size:11px">copy</span>` : ''}
             ${g.boardId ? staticChip('sagey', 'gridfeed', (boardById(d, g.boardId) || {}).name || '') : staticChip('neutral', 'question', 'no matching board')}
+            <button class="btn btn-primary" data-action="gen-plan" data-i="${i}" style="padding:3px 9px;font-size:11.5px">${icon('calendar', 12)}Plan this pin</button>
             <button class="copybtn" data-action="gen-copy" data-i="${i}">${icon('copy', 12)} copy</button>
           </div>
           <div class="gr-title">${esc(g.title)}</div>
           <div class="gr-desc">${esc(g.desc)}</div>
         </div>`).join('')}
       </div>
-      <div class="sparse">${icon('info', 13)}<span>Scores assume a fresh 2:3 image and no alt text yet — they'll tick up once each pin gets alt text in the planner.</span></div>` : ''}
+      <div class="sparse">${icon('info', 13)}<span>These are <b>copy scores</b> — out of the ${(out[0] || {}).total || 49} points the words
+        themselves control: the keyword in the title and the first sentence, a related phrase, the board it lands on, and a
+        keyword in the destination link. What is still outstanding is named on each row, and none of it is anything you can
+        type here — it is confirmed on the pin once the design exists: the keyword written on the image, its file name, its
+        alt text, and a headline that still reads at thumbnail size. The planner shows the whole-pin number.</span></div>` : ''}
     </section>
 
     <section class="card c5">
@@ -4053,13 +4355,22 @@ function viewBoards() {
   const impSum = withM.length ? withM.reduce((a, b) => a + (num(b.m.impressions) ?? 0), 0) : null;
   const covered = active.filter(b => boardHasKeyword(d, b) === true).length;
   const contrast = boardContrast(d);
+  const diverge = boardDivergence(d);
   const audit = boardAudit(d);
   const gaps = keywordGaps(d);
   const bench = num(d.benchmarks.saveRate);
+  const benchOut = num(d.benchmarks.outboundRate);
 
   const bestSaver = withM.filter(b => num(b.m.saves) !== null && num(b.m.impressions) > 0)
     .map(b => ({b, rate: num(b.m.saves) / num(b.m.impressions) * 100}))
     .sort((a, b) => b.rate - a.rate)[0] || null;
+  const bestClicker = withM.filter(b => num(b.m.outboundClicks) !== null && num(b.m.impressions) > 0)
+    .map(b => ({b, rate: num(b.m.outboundClicks) / num(b.m.impressions) * 100}))
+    .sort((a, b) => b.rate - a.rate)[0] || null;
+  const saverTile = tile('Best saver', bestSaver ? `<span class="derived">${fmt.pct(bestSaver.rate, 2)}</span>` : '<span class="dash">—</span>',
+    bestSaver ? esc(bestSaver.b.name) + ' · the reach signal' : 'needs imported metrics', false, 'aqua');
+  const clickerTile = tile('Best click-through', bestClicker ? `<span class="derived">${fmt.pct(bestClicker.rate, 2)}</span>` : '<span class="dash">—</span>',
+    bestClicker ? esc(bestClicker.b.name) + ' · clicks out ÷ impressions' : 'needs imported metrics', false, 'coral');
 
   const mcell = (b, k) => b.m && num(b.m[k]) !== null ? fmt.int(b.m[k]) : '<span class="dash">—</span>';
   const noData = b => period && b.active && (!b.m || b.mPeriod !== period);
@@ -4073,25 +4384,32 @@ function viewBoards() {
       <div class="card-b tight"><div class="tiles">
         ${tile('Active boards', `<span class="derived">${fmt.int(active.length)}</span>`, boards.length - active.length ? `${boards.length - active.length} archived` : 'none archived')}
         ${tile('Board impressions', impSum === null ? '<span class="dash">—</span>' : `<span class="derived">${fmt.int(impSum)}</span>`, period ? 'imported · ' + esc(period) : 'arrives with your CSV import', false, 'teal')}
-        ${tile('Best saver', bestSaver ? `<span class="derived">${fmt.pct(bestSaver.rate, 2)}</span>` : '<span class="dash">—</span>', bestSaver ? esc(bestSaver.b.name) + ' · saves ÷ impressions' : 'needs imported metrics', false, 'aqua')}
+        ${goalIsTraffic(d) ? clickerTile + saverTile : saverTile + clickerTile}
         ${tile('Keyword coverage', active.length ? `<span class="derived">${fmt.int(covered / active.length * 100)}</span><span class="unit">%</span>` : '<span class="dash">—</span>', 'descriptions using their keyword', false, 'golden')}
       </div></div>
     </section>
 
-    ${contrast ? `<section class="card">
+    ${diverge || contrast ? `<section class="card">
       ${cardH('bulb', 'What the numbers are telling you', '', 'golden')}
-      <div class="card-b" style="font-size:13px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      ${diverge ? `<div class="card-b" style="font-size:13px;display:flex;gap:14px;align-items:center;flex-wrap:wrap${contrast ? ';border-bottom:1px solid var(--hairline)' : ''}">
         <span style="display:flex;gap:8px;flex:0 0 auto">
+          <span style="width:92px">${boardCollageHTML(d, diverge.clicker.b)}</span>
+          <span style="width:92px;opacity:.6">${boardCollageHTML(d, diverge.saver.b)}</span>
+        </span>
+        <span style="flex:1;min-width:240px">${divergenceHTML(d, diverge, 'board')}</span>
+      </div>` : ''}
+      ${contrast ? `<div class="card-b" style="font-size:13px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+        ${diverge ? '' : `<span style="display:flex;gap:8px;flex:0 0 auto">
           <span style="width:92px">${boardCollageHTML(d, contrast.best.b)}</span>
           <span style="width:92px;opacity:.6">${boardCollageHTML(d, contrast.worst.b)}</span>
-        </span>
+        </span>`}
         <span style="flex:1;min-width:240px">
         <strong>${esc(contrast.best.b.name)}</strong> turns impressions into saves at <strong>${fmt.pct(contrast.best.rate, 2)}</strong> —
         ${fmt.num(contrast.best.rate / contrast.worst.rate, 0)}× the rate of <strong>${esc(contrast.worst.b.name)}</strong>
         (${fmt.pct(contrast.worst.rate, 2)}) even though ${esc(contrast.worst.b.name)} reaches ${fmt.num(num(contrast.worst.b.m.impressions) / num(contrast.best.b.m.impressions), 1)}× more people.
-        Reach and resonance are different stories: make more of what <em>${esc(contrast.best.b.name)}</em> promises, and rework the pins on <em>${esc(contrast.worst.b.name)}</em> before feeding it more.
+        That is the reach story: saves on <em>${esc(contrast.best.b.name)}</em> are what push it to more feeds. Read it next to the traffic each board actually sends before deciding what to make more of.
         </span>
-      </div>
+      </div>` : ''}
     </section>` : ''}
 
     <section class="card">
@@ -4116,6 +4434,7 @@ function viewBoards() {
           const has = boardHasKeyword(d, b);
           const open = ui.openBoard === b.id;
           const saveR = b.m && num(b.m.saves) !== null && num(b.m.impressions) > 0 ? num(b.m.saves) / num(b.m.impressions) * 100 : null;
+          const outR = b.m && num(b.m.outboundClicks) !== null && num(b.m.impressions) > 0 ? num(b.m.outboundClicks) / num(b.m.impressions) * 100 : null;
           return `<tr${b.active ? '' : ' style="opacity:.55"'}>
             <td><button class="btn btn-ghost" data-action="boardopen" data-id="${b.id}" aria-expanded="${open}" aria-label="Edit ${esc(b.name)} details" style="padding:2px 6px">${icon('chevd', 13, open ? '' : 'chev')}</button></td>
             <td>${edField(`boards.${i}.name`, {label: 'Board name', min: 14})}${sampleChip(b)}
@@ -4127,8 +4446,8 @@ function viewBoards() {
             <td class="num">${mcell(b, 'impressions')}</td>
             <td class="num">${mcell(b, 'engagement')}</td>
             <td class="num">${mcell(b, 'pinClicks')}</td>
-            <td class="num">${mcell(b, 'outboundClicks')}</td>
-            <td class="num">${b.m && num(b.m.saves) !== null ? fmt.int(b.m.saves) + (saveR !== null && bench !== null && saveR >= bench ? ' <span class="bench up" title="save rate beats your benchmark">↑</span>' : '') : '<span class="dash">—</span>'}</td>
+            <td class="num nw">${b.m && num(b.m.outboundClicks) !== null ? fmt.int(b.m.outboundClicks) + (outR !== null && benchOut !== null && outR >= benchOut ? ' <span class="bench up" title="outbound click rate beats your benchmark">↑</span>' : '') : '<span class="dash">—</span>'}</td>
+            <td class="num nw">${b.m && num(b.m.saves) !== null ? fmt.int(b.m.saves) + (saveR !== null && bench !== null && saveR >= bench ? ' <span class="bench up" title="save rate beats your benchmark">↑</span>' : '') : '<span class="dash">—</span>'}</td>
             <td><input type="checkbox" data-checkpath="boards.${i}.active" ${b.active ? 'checked' : ''} aria-label="${esc(b.name)} active"></td>
             <td><button class="rowedit" data-action="editrow" data-list="boards" data-i="${i}" aria-label="Edit this row">${icon('sliders', 13)}</button><button class="rowdel" data-action="delrow" data-list="boards" data-i="${i}" aria-label="Delete board">✕</button></td>
           </tr>
@@ -4351,19 +4670,37 @@ function viewPerformance() {
   const withImp = pub.filter(p => num(p.impressions) !== null);
   const impSum = withImp.length ? withImp.reduce((a, p) => a + num(p.impressions), 0) : null;
   const savesSum = pub.some(p => num(p.saves) !== null) ? pub.reduce((a, p) => a + (num(p.saves) ?? 0), 0) : null;
+  const outSum = pub.some(p => num(p.outboundClicks) !== null) ? pub.reduce((a, p) => a + (num(p.outboundClicks) ?? 0), 0) : null;
   const rated = pub.map(p => ({p, r: pinRates(d, p)}));
   const best = rated.filter(x => x.r.saveRate !== null).sort((a, b) => b.r.saveRate - a.r.saveRate)[0] || null;
+  /* 'na' formats are excluded from the outbound ranking, not scored 0% */
+  const bestOut = rated.filter(x => rankable(x.r, 'outboundRate')).sort((a, b) => b.r.outboundRate - a.r.outboundRate)[0] || null;
   const velocity = pub.filter(p => num(p.saves7) !== null).sort((a, b) => num(b.saves7) - num(a.saves7));
   const fmts = deriveFormats(d);
   const freshCmp = deriveFresh(d);
   const variants = deriveVariants(d);
   const bench = d.benchmarks;
+  const pinDiv = pinDivergence(d);
+  const metricNote = state.meta.metricNote !== 'dismissed';
+  /* Both pairs of tiles always render; the stated goal decides which pair sits
+     first, right after reach. Nothing is removed — save rate is a real metric
+     and the reach it buys is what makes clicks compound. */
+  const outTiles = tile('Outbound clicks', outSum === null ? '<span class="dash">\u2014</span>' : `<span class="derived">${fmt.int(outSum)}</span>`, 'traffic that actually arrived', false, 'coral')
+    + tile('Best outbound rate', bestOut ? `<span class="derived">${fmt.pct(bestOut.r.outboundRate, 2)}</span>` : '<span class="dash">\u2014</span>', bestOut ? esc(bestOut.p.title) : 'log outbound clicks on a pin to see this', false, 'aqua');
+  const saveTiles = tile('Saves logged', savesSum === null ? '<span class="dash">\u2014</span>' : `<span class="derived">${fmt.int(savesSum)}</span>`, 'the distribution signal, typed from pin stats pages')
+    + tile('Best save rate', best ? `<span class="derived">${fmt.pct(best.r.saveRate, 2)}</span>` : '<span class="dash">\u2014</span>', best ? esc(best.p.title) : 'log saves on a pin to see this', false, 'golden');
 
+  /* Default sort follows the goal set in Setup — outbound click rate unless
+     the buyer said they are here to grow on Pinterest. A format with no
+     outbound link sorts last on that key (rankable → -1); it is never
+     given a 0% it cannot have. */
+  const perfSort = ui.perfSort || primaryRate(d);
   let rows = pub.map(p => ({p, i: (d.pins || []).indexOf(p), r: pinRates(d, p)}));
   if (ui.perfFmt !== 'all') rows = rows.filter(x => x.p.format === ui.perfFmt);
   if (ui.perfCanon !== 'all') rows = rows.filter(x => (x.p.canonical || '') === ui.perfCanon);
-  rows.sort((a, b) => ui.perfSort === 'saveRate' ? (b.r.saveRate ?? -1) - (a.r.saveRate ?? -1)
-    : ui.perfSort === 'planned' ? (b.p.planned || '').localeCompare(a.p.planned || '')
+  rows.sort((a, b) => perfSort === 'saveRate' || perfSort === 'outboundRate'
+      ? (rankable(b.r, perfSort) ? b.r[perfSort] : -1) - (rankable(a.r, perfSort) ? a.r[perfSort] : -1)
+    : perfSort === 'planned' ? (b.p.planned || '').localeCompare(a.p.planned || '')
     : (num(b.p.impressions) ?? -1) - (num(a.p.impressions) ?? -1));
 
   const rate = (v, benchKey) => v === 'na' ? '<abbr title="This format has no outbound link — the metric does not apply">N/A</abbr>'
@@ -4374,11 +4711,15 @@ function viewPerformance() {
     `<button class="btn btn-ghost" data-action="import-help">${icon('question', 14)}Where's this data from?</button>
      <button class="btn btn-import" data-action="import">${icon('upload', 14)}Import CSV</button>`) + `
   <div class="grid">
+    ${metricNote ? `<section class="card" aria-label="Saves and clicks measure different things">
+      ${cardH('bulb', 'Saves and clicks measure different things', `<button class="btn btn-ghost" data-action="metric-note-dismiss">Got it \u2014 hide this</button>`, 'teal')}
+      <div class="card-b"><p style="margin:0;font-size:13px;max-width:74ch">A <strong>save</strong> means Pinterest will show your pin to more people \u2014 it grows your reach. An <strong>outbound click</strong> means someone actually came to your site. If your goal is traffic, watch outbound clicks and treat saves as the thing that makes them compound. A pin can be strong on one and weak on the other.</p></div>
+    </section>` : ''}
+
     <section class="card">
       <div class="card-b tight"><div class="tiles">
         ${tile('Pin impressions', impSum === null ? '<span class="dash">—</span>' : `<span class="derived">${fmt.int(impSum)}</span>`, withImp.length ? `across ${withImp.length} imported pins` : 'arrives with your CSV import', false, 'teal')}
-        ${tile('Saves logged', savesSum === null ? '<span class="dash">—</span>' : `<span class="derived">${fmt.int(savesSum)}</span>`, 'typed from pin stats pages')}
-        ${tile('Best save rate', best ? `<span class="derived">${fmt.pct(best.r.saveRate, 2)}</span>` : '<span class="dash">—</span>', best ? esc(best.p.title) : 'log saves on a pin to see this', false, 'aqua')}
+        ${goalIsTraffic(d) ? outTiles + saveTiles : saveTiles + outTiles}
         ${tile('Save velocity', velocity.length ? `<span class="derived">${fmt.int(velocity[0].saves7)}</span>` : '<span class="dash">—</span>', velocity.length ? `first-week saves · ${esc(velocity[0].title)}` : 'log first-7-day saves to spot travelers', false, 'golden')}
       </div></div>
     </section>
@@ -4394,9 +4735,10 @@ function viewPerformance() {
           ${['all', 'Yes', 'No'].map(v => `<option value="${v}" ${ui.perfCanon === v ? 'selected' : ''}>${v === 'all' ? 'All' : v}</option>`).join('')}
         </select></label>
         <label>Sort <select class="flt" data-uikey="perfSort" aria-label="Sort pins">
-          <option value="impressions" ${ui.perfSort === 'impressions' ? 'selected' : ''}>Impressions</option>
-          <option value="saveRate" ${ui.perfSort === 'saveRate' ? 'selected' : ''}>Save rate</option>
-          <option value="planned" ${ui.perfSort === 'planned' ? 'selected' : ''}>Newest</option>
+          <option value="outboundRate" ${perfSort === 'outboundRate' ? 'selected' : ''}>Outbound rate</option>
+          <option value="saveRate" ${perfSort === 'saveRate' ? 'selected' : ''}>Save rate</option>
+          <option value="impressions" ${perfSort === 'impressions' ? 'selected' : ''}>Impressions</option>
+          <option value="planned" ${perfSort === 'planned' ? 'selected' : ''}>Newest</option>
         </select></label>
         <span class="platnote">${rows.length} published pins</span>
       </div>
@@ -4418,15 +4760,16 @@ function viewPerformance() {
             <td class="num">${edField(`pins.${i}.pinClicks`, {type: 'num', label: 'Pin clicks', min: 3})}</td>
             <td class="num">${noOut ? '<abbr title="This format has no outbound link">N/A</abbr>' : edField(`pins.${i}.outboundClicks`, {type: 'num', label: 'Outbound clicks', min: 3})}</td>
             <td class="num">${edField(`pins.${i}.saves7`, {type: 'num', label: 'Saves in first 7 days', min: 3})}</td>
-            <td class="num">${rate(r.saveRate, 'saveRate')}</td>
-            <td class="num">${rate(r.outboundRate, 'outboundRate')}</td>
-            <td class="num">${rate(r.engRate, 'engRate')}</td>
+            <td class="num nw">${rate(r.saveRate, 'saveRate')}</td>
+            <td class="num nw">${rate(r.outboundRate, 'outboundRate')}</td>
+            <td class="num nw">${rate(r.engRate, 'engRate')}</td>
             <td>${p.canonical ? staticChip(p.canonical === 'Yes' ? 'sagey' : 'neutral', 'info', p.canonical) : '<span class="dash">—</span>'}</td>
           </tr>`;
         }).join('')}
         ${rows.length ? '' : `<tr><td colspan="10"><div class="emptystate">No published pins${ui.perfFmt !== 'all' || ui.perfCanon !== 'all' ? ' match these filters' : ' yet — publish from the Pin Planner and they appear here automatically'}.</div></td></tr>`}
       </tbody></table>
       </div></div>
+      ${pinDiv ? `<div class="sparse">${icon('bulb', 13)}<span>${divergenceHTML(d, pinDiv, 'pin')}</span></div>` : ''}
       ${sparseNote(d, 'performance')}
     </section>
 
@@ -4446,9 +4789,18 @@ function viewPerformance() {
       </tbody></table>
       </div></div>
       ${(() => {
-        const cmp = fmts.filter(x => x.saveRate !== null).sort((a, b) => b.saveRate - a.saveRate);
-        return cmp.length >= 2 && cmp[0].saveRate >= cmp[cmp.length - 1].saveRate * 1.5
-          ? `<div class="sparse">${icon('bulb', 13)}<span>${esc(cmp[0].f.label)} pins save at ${fmt.num(cmp[0].saveRate / cmp[cmp.length - 1].saveRate, 1)}× the rate of ${esc(cmp[cmp.length - 1].f.label.toLowerCase())} — worth making more of them.</span></div>` : '';
+        /* Compared on whichever rate the stated goal makes primary. Formats
+           with no outbound link are 'na' and sit the comparison out — they are
+           never ranked last on a number they cannot have. */
+        const key = primaryRate(d);
+        const cmp = fmts.filter(x => x[key] !== null && x[key] !== 'na').sort((a, b) => b[key] - a[key]);
+        if (cmp.length < 2) return '';
+        const hi = cmp[0], lo = cmp[cmp.length - 1];
+        if (!(lo[key] > 0) || hi[key] < lo[key] * 1.5) return '';
+        const verb = key === 'outboundRate' ? 'send clicks out at' : 'save at';
+        const naNote = key === 'outboundRate' && fmts.some(x => x.outboundRate === 'na')
+          ? ' Formats with no outbound link sit this comparison out rather than scoring zero.' : '';
+        return `<div class="sparse">${icon('bulb', 13)}<span>${esc(hi.f.label)} pins ${verb} ${fmt.num(hi[key] / lo[key], 1)}× the rate of ${esc(lo.f.label.toLowerCase())} — worth making more of them.${naNote}</span></div>`;
       })()}
     </section>
 
@@ -4458,7 +4810,7 @@ function viewPerformance() {
           <span class="li-date">${fmtDate(p.planned)}</span>
           <span class="li-main">${esc(p.title)}<div class="li-sub">${fmt.int(p.saves7)} first-week saves${num(p.saves) !== null ? ` · ${fmt.int(p.saves)} total` : ''}</div></span>
           ${num(p.saves7) >= 15 ? staticChip('good', 'flame', 'traveling') : ''}</li>`).join('')}</ul>`
-      : `<div class="emptystate">A week after publishing a pin, note its saves in the fast-entry grid — early savers are how Pinterest decides to keep distributing it.</div>`}
+      : `<div class="emptystate">A week after publishing a pin, note its saves in the fast-entry grid — early savers are how Pinterest decides to keep distributing it, which is how the clicks keep coming.</div>`}
     </section>
 
     <section class="card c6">
@@ -4472,13 +4824,13 @@ function viewPerformance() {
     </section>
 
     <section class="card c6">
-      ${cardH('image', 'Design variant compare', 'same content, different image — which won?', 'coral')}
+      ${cardH('image', 'Design variant compare', `same content, different image — which won on ${goalIsTraffic(d) ? 'clicks out' : 'saves'}?`, 'coral')}
       ${variants.length ? variants.map(g => `<div class="card-b" style="border-bottom:1px solid var(--hairline)">
         <div style="font-weight:600;margin-bottom:6px">${esc(g[0].p.title)}</div>
         ${g.map((x, gi) => `<div class="mixrow">
           <span class="mx-name">${esc(x.p.variant || 'unlabeled')}</span>
-          <span class="mx-nums">${num(x.p.impressions) !== null ? fmt.int(x.p.impressions) + ' impr · ' : ''}${x.r.saveRate !== null ? fmt.pct(x.r.saveRate, 2) + ' save rate' : 'no saves logged'}</span>
-          ${gi === 0 && x.r.saveRate !== null ? staticChip('good', 'check', 'winner') : ''}
+          <span class="mx-nums">${num(x.p.impressions) !== null ? fmt.int(x.p.impressions) + ' impr · ' : ''}${esc(bothRatesText(x.r))}</span>
+          ${gi === 0 && rankable(x.r, primaryRate(d)) ? staticChip('good', 'check', 'winner') : ''}
         </div>`).join('')}
       </div>`).join('')
       : `<div class="emptystate">Publish the same pin twice with different images, give each a variant label in the planner, and the winner shows here.</div>`}
@@ -4502,7 +4854,9 @@ function draftReportNotes(d) {
   if (stats.days) bits.push(`Impressions averaged ${fmt.num(stats.avg, 0)}/day across the ${stats.days} days Pinterest reported.`);
   const pub = publishedPins(d).filter(p => (p.planned || '').slice(0, 7) === monthKey());
   if (pub.length) bits.push(`${pub.length} pin${pub.length === 1 ? '' : 's'} published this month${fr.pct !== null ? `, ${fmt.num(fr.pct, 0)}% fresh images` : ''}.`);
-  if (contrast) bits.push(`${contrast.best.b.name} is the quiet winner — it turns impressions into saves at ${fmt.num(contrast.best.rate / contrast.worst.rate, 0)}× the rate of ${contrast.worst.b.name}, which reaches further but lands softer.`);
+  if (contrast) bits.push(`${contrast.best.b.name} is the quiet winner on reach signal — it turns impressions into saves at ${fmt.num(contrast.best.rate / contrast.worst.rate, 0)}× the rate of ${contrast.worst.b.name}, which reaches further but lands softer.`);
+  const dv = boardDivergence(d);
+  if (dv) bits.push(`Saves and traffic disagree this period: ${dv.clicker.label} sent ${fmt.num(dv.clickLead, 1)}× the outbound clicks of ${dv.saver.label} despite a ${fmt.num(dv.saveLead, 1)}× lower save rate. ${goalIsTraffic(d) ? `With traffic as the goal, ${dv.clicker.label} is where the next pins should go.` : `With reach as the goal, ${dv.saver.label} stays the priority \u2014 but ${dv.clicker.label} is what is sending people to the site.`}`);
   if (gaps.length) bits.push(`Next opportunity: the audience over-indexes on ${gaps[0].i.name} (${fmt.num(gaps[0].i.affinity, 2)}×) and no board targets it yet.`);
   return bits.length ? bits.join(' ') : null;
 }
@@ -4517,6 +4871,13 @@ function viewReport() {
   const outSum = pub.some(p => num(p.outboundClicks) !== null) ? pub.reduce((a, p) => a + (num(p.outboundClicks) ?? 0), 0) : null;
   const rated = pub.filter(p => num(p.saves) !== null && num(p.impressions) !== null);
   const saveRate = rated.length ? rated.reduce((a, p) => a + num(p.saves), 0) / rated.reduce((a, p) => a + num(p.impressions), 0) * 100 : null;
+  /* Outbound rate counts only pins whose format HAS an outbound link, so a
+     format that cannot click out never drags the reported rate down. */
+  const outRated = pub.filter(p => num(p.outboundClicks) !== null && num(p.impressions) !== null
+    && pinRates(d, p).outboundRate !== 'na');
+  const outRate = outRated.length ? outRated.reduce((a, p) => a + num(p.outboundClicks), 0) / outRated.reduce((a, p) => a + num(p.impressions), 0) * 100 : null;
+  const saveRateTile = tile('Save rate', saveRate === null ? '<span class="dash">\u2014</span>' : `<span class="derived">${fmt.pct(saveRate, 2)}</span>`, benchBadge(saveRate, d.benchmarks.saveRate) || 'saves \u00f7 impressions');
+  const outRateTile = tile('Outbound rate', outRate === null ? '<span class="dash">\u2014</span>' : `<span class="derived">${fmt.pct(outRate, 2)}</span>`, benchBadge(outRate, d.benchmarks.outboundRate) || 'clicks out \u00f7 impressions');
   const fr = freshRatio(d);
   const topBoards = (d.boards || []).filter(b => b.active && b.m && num(b.m.impressions) !== null)
     .sort((a, b) => num(b.m.impressions) - num(a.m.impressions)).slice(0, 5);
@@ -4551,7 +4912,7 @@ function viewReport() {
         ${tile('Impressions / day', stats.avg === null ? '<span class="dash">—</span>' : `<span class="derived">${fmt.num(stats.avg, 0)}</span>`, stats.days ? `avg over ${stats.days} reported days` : 'no daily data yet')}
         ${tile('Saves', savesSum === null ? '<span class="dash">—</span>' : `<span class="derived">${fmt.int(savesSum)}</span>`, 'across tracked pins')}
         ${tile('Outbound clicks', outSum === null ? '<span class="dash">—</span>' : `<span class="derived">${fmt.int(outSum)}</span>`, 'traffic sent off-platform')}
-        ${tile('Save rate', saveRate === null ? '<span class="dash">—</span>' : `<span class="derived">${fmt.pct(saveRate, 2)}</span>`, benchBadge(saveRate, d.benchmarks.saveRate) || 'saves ÷ impressions')}
+        ${goalIsTraffic(d) ? outRateTile + saveRateTile : saveRateTile + outRateTile}
         ${tile('Fresh pins', fr.pct === null ? '<span class="dash">—</span>' : `<span class="derived">${fmt.int(fr.pct)}</span><span class="unit">%</span>`, fr.total ? `${fr.fresh} of ${fr.total} this month ${benchBadge(fr.pct, d.benchmarks.freshRatio)}` : 'none published this month')}
       </div>
       ${impSeries.filter(r => r.v !== null).length >= 7 ? `<div class="rep-spark" style="margin-top:14px">${sparkSVG(impSeries.map(r => r.v === null ? 0 : r.v), {id: 'sparkRep', money: false, labels: impSeries.map((r, i) => i % 14 === 0 ? fmtDate(r.date) : ''), tipLabels: impSeries.map(r => fmtDate(r.date))})}</div>` : ''}
@@ -4767,7 +5128,7 @@ const ADD_FORMS = {
     {k: 'status', label: 'Status', options: () => cycleOptions('pipeline')},
     {k: 'seasonal', label: 'Season', options: d => seasonOptions(d)},
     {k: 'destUrl', label: 'Destination URL', ph: 'where the pin links to'},
-    {k: 'desc', label: 'Description', ph: 'keyword in the first sentence'},
+    {k: 'desc', label: 'Description', ph: 'keyword in the first sentence', area: true},
   ]},
   seasons: {title: 'Add season', hint: 'publish-by = 1st of the peak month − lead days', fields: [
     {k: 'name', label: 'Season', ph: 'e.g. Back to school'},
@@ -4782,6 +5143,10 @@ function addModalHTML() {
   // fresh each render, every field pre-fills, and the footer gains Delete.
   const {list, i} = ui.addModal;
   const editMode = i !== undefined;
+  /* An add form seeded on purpose — "Plan this pin" from the metadata generator — must
+     SHOW what it was seeded with. A plain add must not: NEW_ROW.pins() seeds
+     title:'New pin', which would otherwise sit pre-typed in every new pin. */
+  const prefilled = !editMode && !!ui.addModal.prefilled;
   const row = editMode ? listRef(list)[i] : ui.addModal.row;
   const spec = ADD_FORMS[list];
   if (!spec || !row) return '';
@@ -4794,12 +5159,21 @@ function addModalHTML() {
       return `<label class="af-row"><span class="af-l">${esc(f.label)}</span>
         <select class="af-in" data-fkey="${f.k}" data-ftype="${f.type || 'text'}">${opts.map(o => `<option value="${esc(o.v)}" ${String(o.v) === String(seed ?? '') ? 'selected' : ''}>${esc(o.t)}</option>`).join('')}</select></label>`;
     }
-    // adding: text starts empty (the NEW_ROW seed survives a blank save); editing: everything pre-fills
-    const val = f.type === 'num' ? (num(seed) ?? '') : f.type === 'date' ? (seed || '') : editMode ? (seed ?? '') : '';
+    // adding: text starts empty (the NEW_ROW seed survives a blank save) unless the form
+    // was seeded deliberately; editing: everything pre-fills
+    const val = f.type === 'num' ? (num(seed) ?? '') : f.type === 'date' ? (seed || '')
+      : (editMode || prefilled) ? (seed ?? '') : '';
+    const ph = f.ph || '';
+    /* A generated description runs past 200 characters — unreadable in a one-line input. */
+    if (f.area) {
+      return `<label class="af-row"><span class="af-l">${esc(f.label)}</span>
+        <textarea class="af-in" data-fkey="${f.k}" data-ftype="text" rows="4"
+          style="resize:vertical;font:inherit;line-height:1.5"
+          aria-label="${esc(f.label)}" ${ph ? `placeholder="${esc(ph)}"` : ''}>${esc(val)}</textarea></label>`;
+    }
     const attrs = [`class="af-in"`, `data-fkey="${f.k}"`, `data-ftype="${f.type || 'text'}"`,
       `type="${f.type === 'date' ? 'date' : 'text'}"`, `value="${esc(val)}"`, `aria-label="${esc(f.label)}"`];
     if (f.type === 'num') attrs.push('inputmode="decimal"', 'autocomplete="off"');
-    const ph = f.ph || '';
     if (!f.type && ph) attrs.push(`placeholder="${esc(ph)}"`);
     if (f.type === 'num' && ph) attrs.push(`placeholder="${esc(ph)}"`);
     return `<label class="af-row"><span class="af-l">${esc(f.label)}</span><input ${attrs.join(' ')}></label>`;
@@ -4897,8 +5271,26 @@ document.addEventListener('click', e => {
     save(true); render();
   }
   else if (act === 'gen-run') { runGenerator(); }
-  else if (act === 'gen-push') { pushGeneratedToPlanner(); }
   else if (act === 'gen-clear') { ui.genOut = null; render(); }
+  /* One generated pin into the planner, through the same "Plan a new pin" form a buyer
+     would fill in by hand — so they choose the board and the date. The bulk push this
+     replaced scattered every pin across dates nobody picked. Seeding the row follows
+     the cal-day precedent below; `prefilled` is what lets the text fields show it. */
+  else if (act === 'gen-plan') {
+    const g = (ui.genOut || [])[parseInt(btn.dataset.i, 10)];
+    if (!g) return;
+    const row = NEW_ROW.pins();
+    row.title = g.title;
+    row.keyword = g.kw;
+    row.desc = g.desc;
+    row.boardId = g.boardId || '';
+    const c = (ui.genContent || '').trim();
+    if (/^https?:\/\//i.test(c)) row.destUrl = c;
+    ui.addModal = {list: 'pins', row, prefilled: true};
+    render();
+    const first = document.querySelector('.pmodal .af-in');
+    if (first && window.matchMedia('(hover:hover) and (pointer:fine)').matches) first.focus();
+  }
   else if (act === 'gen-copy') {
     const g = (ui.genOut || [])[parseInt(btn.dataset.i, 10)];
     if (g) copyText(g.title + '\n\n' + g.desc);
@@ -4928,6 +5320,15 @@ document.addEventListener('click', e => {
   else if (act === 'import-cancel') { ui.importPreview = null; render(); toast('Import cancelled — nothing was changed'); }
   else if (act === 'planmode') {
     ui.plannerMode = btn.dataset.mode;
+    render();
+  }
+  else if (act === 'topsort') {
+    ui.topSort = btn.dataset.sort;
+    render();
+  }
+  else if (act === 'metric-note-dismiss') {
+    state.meta.metricNote = 'dismissed';
+    save(false);
     render();
   }
   else if (act === 'cal-shift') {
@@ -5008,7 +5409,15 @@ document.addEventListener('click', e => {
       // a new pin must be visible immediately: clear any status filter that would
       // hide it, and open its drawer (desc, alt text, links) — same for boards,
       // whose description and slug live in the collapsed drawer
-      if (list === 'pins') { ui.filterPins = 'all'; ui.openPin = row.id; }
+      if (list === 'pins') { ui.filterPins = 'all'; ui.openPin = row.id;
+        /* The drawer just opened lives in the planner. A pin planned from the Keyword
+           Vault would otherwise be saved into a view that cannot show it — which reads
+           exactly like nothing having happened. */
+        if (ui.view !== 'planner') {
+          ui.view = 'planner';
+          animPending = true;
+          try { history.replaceState(null, '', '#planner'); } catch (e) {}
+        } }
       if (list === 'boards') ui.openBoard = row.id;
     } else if (list === 'pins') ui.filterPins = 'all'; // an edited status must not hide the row
     save(true); render();
@@ -5104,6 +5513,13 @@ document.addEventListener('change', e => {
   if (el.dataset && el.dataset.checkmeta) {
     state.meta[el.dataset.checkmeta] = el.checked;
     save(false);
+    return;
+  }
+  if (el.dataset && el.dataset.goalpick) {
+    D().goal = el.value;
+    save(true);
+    render();
+    toast(goalIsTraffic(D()) ? '✓ Outbound clicks now lead' : '✓ Saves now lead');
     return;
   }
   if (el.dataset && el.dataset.checkpath) {
