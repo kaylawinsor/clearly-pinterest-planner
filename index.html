@@ -3068,14 +3068,28 @@ function toneOf(p) {
   return h % 6;
 }
 /* Which image a tile shows: the buyer's attached image wins; SAMPLE pins fall
-   back to a subject-matched generated design (so the demo reads like a real
-   feed); a buyer's own pins keep the tinted placeholder until they attach. */
+   back to a subject-matched generated design, so any pin without its own image reads
+   like a real feed rather than an empty slot. Cleared files opt out — see
+   pinThumbArtOn(). */
 const SAMPLE_PIN_ART = typeof SAMPLE_PINS === 'undefined' ? [] : SAMPLE_PINS;
 const SAMPLE_PIN_SUBJECTS = [/pantry/i, /label/i, /playroom|toy/i, /drawer/i, /linen/i, /entryway/i,
   /nook|reading/i, /laundry/i, /gift|wrap/i, /christmas|holiday/i, /clean|bathroom|sink/i, /small space|living|furniture|renter/i];
+/* Placeholder art is drawn for ANY pin without its own image, not just the flagged
+   sample rows — that gate left an imported pin (48 of them after one CSV) and every
+   pin a buyer plans as a blank tile, so the board grid read half-built while Social,
+   whose thumbTile has never gated on the flag, read finished.
+
+   It stops at Clear, though. `meta.sample === 'cleared'` means the buyer asked to
+   start fresh, and continuing to draw invented photographs over their own pins is the
+   opposite of fresh — so from that point the tinted tile IS the honest state, and the
+   attach-image affordance is the thing to show. */
+function pinThumbArtOn() {
+  return typeof state !== 'undefined' && state && state.meta
+    ? state.meta.sample !== 'cleared' : true;
+}
 function pinThumbSrc(p) {
   if (p.img) return p.img;
-  if (!p.sample || !SAMPLE_PIN_ART.length) return null;
+  if (!SAMPLE_PIN_ART.length || !pinThumbArtOn()) return null;
   const hay = (p.title || '') + ' ' + (p.keyword || '');
   let idx = SAMPLE_PIN_SUBJECTS.findIndex(re => re.test(hay));
   if (idx < 0) idx = toneOf(p) * 2 % SAMPLE_PIN_ART.length;
@@ -3087,7 +3101,7 @@ function pinThumbHTML(d, p, {size = 'md', tools = true, cls = '', sub = ''} = {}
   const src = pinThumbSrc(p);
   return `<span class="pthumb pt-${size} ptone-${toneOf(p)} ${src ? 'has-img' : ''} ${p.status === 'published' ? 'pt-pub' : p.status === 'scheduled' ? 'pt-sched' : ''} ${cls}"
       data-action="cal-pin" data-id="${p.id}" role="button" tabindex="0"
-      title="${esc(p.title)} — ${p.status}${late ? ' · LATE for its season' : ''}${src ? '' : ' · placeholder art until you attach the real pin image'}">
+      title="${esc(p.title)} — ${p.status}${late ? ' · LATE for its season' : ''}${p.img ? '' : ' · placeholder art until you attach the real pin image'}">
     ${src ? `<img class="pt-img" src="${src}" alt="">` : ''}
     <span class="pt-title"><span class="pt-t">${esc(p.title)}</span>${sub ? `<span class="pt-subline">${sub}</span>` : ''}</span>
     ${late ? '<span class="pt-flag pt-late" title="Planned too late for its season">⚠</span>'
