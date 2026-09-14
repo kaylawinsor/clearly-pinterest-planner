@@ -1141,7 +1141,7 @@ function starterData() {
 function sampleData() {
   const d = starterData();
   d.brand = {name: 'Willow & Pine', niche: 'Home organization & small-space decor', url: 'willowandpine.shop', owner: 'You'};
-  d.benchmarks = {...BENCH_DEFAULTS, weeklyPins: 3};   // a solo maker's honest pace
+  d.benchmarks = {...BENCH_DEFAULTS, weeklyPins: 2};   // a solo maker's honest pace — and the pace this sample actually keeps
 
   /* --- keyword clusters (Setup) — one deliberately has no board, so the
      keyword-gap list on Boards & Keywords has content on first open --- */
@@ -1509,6 +1509,204 @@ function storeSet(v) {
 }
 
 /* ================================================================
+   Asset store — pin images, deliberately NOT inside the state blob
+   ----------------------------------------------------------------
+   One pin image is 40-60KB of base64, which costs ~80-120KB of a localStorage
+   bucket that EVERY file:// page shares with every other Clearly planner. Kept
+   inside `state` they were rewritten in full on every debounced save, and one
+   image too many failed that save as a WHOLE — the buyer loses a season of
+   planning because they attached a picture.
+
+   Images now live under their own ids, on the roomiest backend the browser
+   offers. Measured on file:// in Chrome: IndexedDB 10,241MB vs localStorage
+   9.75MB shared. That is the difference between a planner that survives year
+   one at a pin a day and one that doesn't.
+
+   Three tiers, chosen once at boot:
+     'idb'  IndexedDB — the real answer, effectively unlimited
+     'ls'   one localStorage key per image — at least a too-big image fails alone
+     'mem'  this session only (storage switched off, or the locked demo)
+
+   `assetGet` is SYNCHRONOUS in all three tiers: a render paints dozens of pin
+   tiles and cannot await. Everything is held in `assetStore`, hydrated before
+   the first paint. Only writes are async, and only on the IndexedDB tier.
+================================================================ */
+const ASSET_KEY = KEY + '.assets';
+let assetStore = {};      // id -> dataURL — the synchronous source of truth
+let assetTier = 'mem';
+let assetDB = null;
+
+function assetGet(id) { return (id && assetStore[id]) || null; }
+function assetsAll() { return assetStore; }
+function assetsSize() {
+  let n = 0;
+  for (const k in assetStore) n += (assetStore[k] || '').length;
+  return n;
+}
+function lsAssetKey(id) { return ASSET_KEY + '.' + id; }
+function lsAssetAll() {
+  const out = {};
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.indexOf(ASSET_KEY + '.') === 0) out[k.slice(ASSET_KEY.length + 1)] = localStorage.getItem(k) || '';
+    }
+  } catch (e) { /* blocked — nothing enumerable */ }
+  return out;
+}
+
+/* A browser that never answers is a browser without usable IndexedDB: Safari and
+   Firefox on file:// are the known unknowns, and a planner that hangs on a promise
+   that never settles is worse than one that quietly uses localStorage. */
+function idbOpen() {
+  return new Promise(res => {
+    let done = false;
+    const finish = v => { if (!done) { done = true; res(v); } };
+    setTimeout(() => finish(null), 1500);
+    try {
+      if (typeof indexedDB === 'undefined' || !indexedDB) return finish(null);
+      const q = indexedDB.open(ASSET_KEY, 1);
+      q.onupgradeneeded = () => { try { q.result.createObjectStore('assets'); } catch (e) { /* already there */ } };
+      q.onsuccess = () => finish(q.result);
+      q.onerror = () => finish(null);
+      q.onblocked = () => finish(null);
+    } catch (e) { finish(null); }   // private-mode Firefox throws synchronously here
+  });
+}
+function idbAll(db) {
+  return new Promise(res => {
+    const out = {};
+    try {
+      const tx = db.transaction('assets', 'readonly');
+      const cur = tx.objectStore('assets').openCursor();
+      cur.onsuccess = e => {
+        const c = e.target.result;
+        if (!c) return res(out);
+        if (typeof c.value === 'string') out[c.key] = c.value;
+        c.continue();
+      };
+      cur.onerror = () => res(out);
+      tx.onerror = () => res(out);
+    } catch (e) { res(out); }
+  });
+}
+function idbPut(db, id, v) {
+  return new Promise(res => {
+    try {
+      const tx = db.transaction('assets', 'readwrite');
+      tx.objectStore('assets').put(v, id);
+      tx.oncomplete = () => res('ok');
+      tx.onerror = () => res(quotaError(tx.error) ? 'full' : 'blocked');
+      tx.onabort = () => res(quotaError(tx.error) ? 'full' : 'blocked');
+    } catch (e) { res('blocked'); }
+  });
+}
+
+/* Returns a promise for 'ok' | 'full' | 'blocked' — the same three words storeSet
+   speaks, so callers reuse wording the buyer already knows. The in-memory map is
+   updated FIRST and synchronously, so the image paints immediately whatever the
+   backend goes on to say. Deliberately does NOT touch storageOK / storageWhy: an
+   image that won't fit is not a broken planner, and the undismissable banner stays
+   reserved for the planner itself failing to save. */
+function assetSet(id, dataURL) {
+  if (!id || !dataURL) return Promise.resolve('blocked');
+  assetStore[id] = dataURL;
+  if (DEMO_LOCKED) return Promise.resolve('ok');        // demo edits are in-memory by design
+  if (assetTier === 'idb') return idbPut(assetDB, id, dataURL);
+  if (assetTier === 'mem') return Promise.resolve('blocked');
+  try { localStorage.setItem(lsAssetKey(id), dataURL); return Promise.resolve('ok'); }
+  catch (e) { return Promise.resolve(quotaError(e) ? 'full' : 'blocked'); }
+}
+function assetDel(id) {
+  if (!id) return;
+  delete assetStore[id];
+  if (DEMO_LOCKED) return;
+  if (assetTier === 'idb') {
+    try { assetDB.transaction('assets', 'readwrite').objectStore('assets').delete(id); } catch (e) { /* nothing to lose */ }
+    return;
+  }
+  try { localStorage.removeItem(lsAssetKey(id)); } catch (e) { /* nothing to lose */ }
+}
+function assetClearAll() {
+  const ids = Object.keys(assetStore);
+  assetStore = {};
+  if (DEMO_LOCKED) return;
+  if (assetTier === 'idb') {
+    try { assetDB.transaction('assets', 'readwrite').objectStore('assets').clear(); } catch (e) { /* nothing to lose */ }
+    return;
+  }
+  ids.forEach(id => { try { localStorage.removeItem(lsAssetKey(id)); } catch (e) { /* nothing to lose */ } });
+}
+
+/* Pick the tier and fill the map, once, before the first paint. */
+async function hydrateAssets() {
+  if (DEMO_LOCKED) { assetTier = 'mem'; return; }
+  const db = await idbOpen();
+  if (db) {
+    assetDB = db;
+    assetTier = 'idb';
+    assetStore = await idbAll(db);
+    /* A file that ran on the localStorage tier before (no IndexedDB then, or an
+       older build) still has its images in sibling keys. Fold them in and retire
+       them, so nobody loses a pin design by changing browser version. */
+    const legacy = lsAssetAll();
+    for (const id of Object.keys(legacy)) {
+      if (assetStore[id]) { try { localStorage.removeItem(lsAssetKey(id)); } catch (e) {} continue; }
+      const r = await idbPut(db, id, legacy[id]);
+      assetStore[id] = legacy[id];
+      if (r === 'ok') { try { localStorage.removeItem(lsAssetKey(id)); } catch (e) {} }
+    }
+    return;
+  }
+  /* No usable IndexedDB. Per-key localStorage is the fallback: far tighter, but a
+     too-big image still fails on its own instead of taking the planner's save with it. */
+  try { localStorage.getItem(KEY); assetTier = 'ls'; } catch (e) { assetTier = 'mem'; }
+  if (assetTier === 'ls') assetStore = lsAssetAll();
+}
+
+/* One-time move of pin images out of the state blob, for files and backups written
+   before the split. An image that cannot be written stays exactly where it is and is
+   retried next load — a migration must never be the thing that loses a buyer's work —
+   so the done-flag is set only once every image has actually moved. */
+async function migrateInlineImages() {
+  if (DEMO_LOCKED || state.meta.imgSplit) return;
+  let moved = 0, stuck = 0;
+  for (const p of (state.data.pins || [])) {
+    if (!p || typeof p.img !== 'string' || p.img.slice(0, 5) !== 'data:') continue;
+    if (!p.id) p.id = uid();
+    if (await assetSet(p.id, p.img) !== 'ok') { stuck++; continue; }
+    p.hasImg = true;
+    delete p.img;
+    moved++;
+  }
+  if (!stuck) state.meta.imgSplit = true;
+  // straight to storage, not the debounced save(): a "✓ Saved" toast at a moment the
+  // buyer did nothing reads like a glitch, and there is no #main to patch a banner into yet
+  if (moved || !stuck) storeSet(JSON.stringify(state));
+}
+
+/* Every file:// page shares ONE localStorage bucket, so the only honest reading is the
+   whole bucket — a buyer with three Clearly planners in Downloads fills one jar with all
+   three. UTF-16, so two bytes per character. On the IndexedDB tier there is no ceiling
+   worth warning about, so the warning simply never fires — which is the entire point. */
+const LS_BUDGET = 5 * 1024 * 1024;   // Chrome measured 9.75MB on file://; Safari is commonly 5MB. Warn on the floor.
+function storageUsedBytes() {
+  let n = 0;
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k == null) continue;
+      n += (k.length + (localStorage.getItem(k) || '').length) * 2;
+    }
+  } catch (e) { return 0; }   // blocked: nothing to measure, and the banner already says so
+  return n;
+}
+function storageTight() {
+  if (assetTier === 'idb') return false;
+  return storageUsedBytes() >= LS_BUDGET * 0.8;
+}
+
+/* ================================================================
    Sample data lifecycle — the file ships populated so a buyer can see
    how everything works, then clears it in one click. Row collections
    carry sample:true; Setup-style scalars revert only if untouched.
@@ -1533,6 +1731,10 @@ function clearSampleData(d) {
     if (!Array.isArray(arr)) return;
     const parent = p.includes('.') ? atPath(d, p.slice(0, p.lastIndexOf('.'))) : d;
     const key = p.slice(p.lastIndexOf('.') + 1);
+    /* A sample pin can carry an image the buyer attached before clearing. The row goes,
+       so its image goes with it — otherwise it sits in storage forever with nothing left
+       in the planner to show it or remove it. */
+    if (key === 'pins') arr.forEach(r => { if (r && r.sample) assetDel(r.id); });
     parent[key] = arr.filter(r => !(r && r.sample));
   });
   // templates and seasons ship as real defaults, not demo fluff — put the starters back
@@ -1604,15 +1806,19 @@ function freshState() {
   return {
     version: 1,
     data: flagSampleRows(sampleData()),
-    meta: {edits: 0, lastBackup: null, nudgeSnoozed: null, firstRun: todayISO(), sample: 'active'},
+    meta: {edits: 0, lastBackup: null, nudgeSnoozed: null, firstRun: todayISO(), sample: 'active', imgSplit: true},
   };
+}
+/* Shape check only — no side effects, so a restore can ask "are you sure?" before
+   anything at all has been written. */
+function looksLikeState(s) {
+  return !!(s && typeof s === 'object' && s.meta && s.data
+    && Array.isArray(s.data.pins) && Array.isArray(s.data.boards));
 }
 /* Accepts a current-shape state (a Clearly Pinterest backup) — anything else is rejected */
 function normalizeState(s) {
-  if (!s || typeof s !== 'object' || !s.meta) return null;
-  if (s.data && Array.isArray(s.data.pins) && Array.isArray(s.data.boards))
-    return {version: 1, data: s.data, meta: s.meta};
-  return null;
+  if (!looksLikeState(s)) return null;
+  return {version: 1, data: s.data, meta: s.meta};
 }
 let state;
 (function loadState() {
@@ -1698,9 +1904,19 @@ function setPath(path, value) {
 }
 
 /* Backup / Restore / Reset */
+/* Rough size of the file doBackup() is about to hand over, in MB. Pin images are the
+   whole story — the rest of a planner is a few dozen KB of text. */
+function backupSizeMB() {
+  return (JSON.stringify(state).length + assetsSize()) / (1024 * 1024);
+}
 function doBackup() {
   if (DEMO_LOCKED) { toast('Backup is part of the full version'); return; }
-  const blob = new Blob([JSON.stringify(state, null, 2)], {type: 'application/json'});
+  /* Images live outside the state blob now, so a plain JSON.stringify(state) would hand
+     the buyer a backup with no pin designs in it. Sidecar them — a backup has to stay
+     portable to another machine. Folded into a copy, never onto `state`: the whole point
+     of the split is that the thing saved every 0.3s stays text-sized. */
+  const payload = Object.assign({}, state, {assets: assetsAll()});
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {type: 'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `clearly-pinterest-planner-backup-${todayISO()}.json`;
@@ -1716,10 +1932,29 @@ function doRestore(file) {
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      const norm = normalizeState(JSON.parse(reader.result));
-      if (!norm) throw new Error('shape');
+      const parsed = JSON.parse(reader.result);
+      // shape first, confirm second, write third — a cancelled restore must change
+      // nothing, and unpacking a backup's images into the store is already a write
+      if (!looksLikeState(parsed)) throw new Error('shape');
       if (!confirm('Replace everything in this planner with the backup "' + file.name + '"? Your current data will be overwritten.')) return;
+      assetClearAll();   // the images of the planner being replaced go with it
+      const norm = normalizeState(parsed);
+      if (!norm) throw new Error('shape');
       state = norm;
+      /* Two backup shapes are accepted: the current one, which carries its pictures in
+         an `assets` sidecar, and anything written before the split, where each pin
+         carried its picture inline. Older backups just have no `assets` key. */
+      if (parsed.assets && typeof parsed.assets === 'object' && !Array.isArray(parsed.assets)) {
+        Object.keys(parsed.assets).forEach(id => {
+          const url = parsed.assets[id];
+          if (typeof url !== 'string' || url.slice(0, 5) !== 'data:') return;
+          assetSet(id, url);
+          const p = (state.data.pins || []).find(q => q && q.id === id);
+          if (p) { p.hasImg = true; delete p.img; }
+        });
+      }
+      state.meta.imgSplit = false;
+      migrateInlineImages();   // folds in any pin that still carries its picture inline
       save(false);
       applyTheme(); applyPalette();
       render();
@@ -1736,6 +1971,7 @@ function doReset() {
   if (!confirm(DEMO
     ? 'Reset the demo back to its original sample data?'
     : 'Reset the entire planner to a clean starter state? This erases everything you have entered. Consider downloading a Backup first.')) return;
+  assetClearAll();   // "erases everything" has to include the pin images, which no longer live inside KEY
   state = freshState();
   save(false);
   applyTheme(); applyPalette();
@@ -2213,9 +2449,16 @@ function seoFixList(d, p) {
     ${passes.map(c => `<li class="pass">${icon('check', 13)}<span>${c.pass}</span></li>`).join('')}
   </ul>`;
 }
-/* Average score across pins that have a keyword — feeds the health gauge */
+/* Average score across pins that have a keyword — feeds the health gauge.
+   Published and scheduled only. An idea or a designed pin has no description
+   and no alt text YET, by definition, so averaging the backlog in means that
+   adding an idea DROPS your program health — exactly backwards. The gauge
+   asks how good the SEO is on the pins you have committed to; the backlog is
+   handled where it belongs, in each pin's own fix-list. */
 function seoAverage(d) {
-  const scores = (d.pins || []).map(p => seoScore(d, p).score).filter(v => v !== null);
+  const scores = (d.pins || [])
+    .filter(p => p.status === 'published' || p.status === 'scheduled')
+    .map(p => seoScore(d, p).score).filter(v => v !== null);
   return scores.length ? scores.reduce((a, v) => a + v, 0) / scores.length : null;
 }
 
@@ -3087,8 +3330,14 @@ function pinThumbArtOn() {
   return typeof state !== 'undefined' && state && state.meta
     ? state.meta.sample !== 'cleared' : true;
 }
+/* Does this pin have a design of the buyer's own, right now? Truth comes from the
+   bytes, not the flag: a file whose storage was cleared underneath it still carries
+   hasImg, and an unsaved draft still carries its picture inline. */
+function hasPinImg(p) { return !!(p && (p.img || (p.hasImg && assetGet(p.id)))); }
 function pinThumbSrc(p) {
-  if (p.img) return p.img;
+  if (p.img) return p.img;             // legacy inline, or an unsaved draft row
+  const own = assetGet(p.id);
+  if (own) return own;                 // the buyer's own pin design — attached locally, never uploaded
   if (!SAMPLE_PIN_ART.length || !pinThumbArtOn()) return null;
   const hay = (p.title || '') + ' ' + (p.keyword || '');
   let idx = SAMPLE_PIN_SUBJECTS.findIndex(re => re.test(hay));
@@ -3101,7 +3350,7 @@ function pinThumbHTML(d, p, {size = 'md', tools = true, cls = '', sub = ''} = {}
   const src = pinThumbSrc(p);
   return `<span class="pthumb pt-${size} ptone-${toneOf(p)} ${src ? 'has-img' : ''} ${p.status === 'published' ? 'pt-pub' : p.status === 'scheduled' ? 'pt-sched' : ''} ${cls}"
       data-action="cal-pin" data-id="${p.id}" role="button" tabindex="0"
-      title="${esc(p.title)} — ${p.status}${late ? ' · LATE for its season' : ''}${p.img ? '' : ' · placeholder art until you attach the real pin image'}">
+      title="${esc(p.title)} — ${p.status}${late ? ' · LATE for its season' : ''}${hasPinImg(p) ? '' : ' · placeholder art until you attach the real pin image'}">
     ${src ? `<img class="pt-img" src="${src}" alt="">` : ''}
     <span class="pt-title"><span class="pt-t">${esc(p.title)}</span>${sub ? `<span class="pt-subline">${sub}</span>` : ''}</span>
     ${late ? '<span class="pt-flag pt-late" title="Planned too late for its season">⚠</span>'
@@ -3109,7 +3358,7 @@ function pinThumbHTML(d, p, {size = 'md', tools = true, cls = '', sub = ''} = {}
 
     ${tools && size !== 'sm' ? `<span class="pt-tools">
       <button data-action="pinimg" data-id="${p.id}" aria-label="Attach this pin's image" title="Attach the real pin image">${icon('image', 11)}</button>
-      ${p.img ? `<button data-action="pinimgdel" data-id="${p.id}" aria-label="Remove image" title="Back to placeholder art">${icon('x', 10)}</button>` : ''}
+      ${hasPinImg(p) ? `<button data-action="pinimgdel" data-id="${p.id}" aria-label="Remove image" title="Back to placeholder art">${icon('x', 10)}</button>` : ''}
     </span>` : ''}
   </span>`;
 }
@@ -3132,11 +3381,24 @@ function attachPinImg(file, id) {
       const sw = W / scale, sh = H / scale;
       c.getContext('2d').drawImage(im, (im.width - sw) / 2, (im.height - sh) / 2, sw, sh, 0, 0, W, H);
       const dataUri = c.toDataURL('image/jpeg', 0.75);
+      /* An unsaved row has no stable id to file a picture under yet, so it keeps it
+         inline exactly as before; addsave moves it into the store on commit. */
       if (draft) { draft.img = dataUri; render(); toast('✓ Image attached — it saves with the pin'); return; }
-      setPath(`pins.${idx}.img`, dataUri);
-      save(true);
-      render();
-      toast('✓ Pin image added — stored only on this device');
+      const p = D().pins[idx];
+      /* Read the bucket BEFORE adding to it, so any warning describes the situation the
+         buyer is walking into. One toast carries the result either way — two in a row
+         would overwrite each other before the first could be read. */
+      const tight = storageTight();
+      assetSet(p.id, dataUri).then(res => {
+        p.hasImg = true;
+        delete p.img;              // a replaced legacy picture doesn't belong in the blob
+        save(true);
+        render();
+        if (res === 'full') toast('⚠ That image didn’t fit — this browser is out of room. Your pins are still saving fine.');
+        else if (res === 'blocked') toast('⚠ Image added for this session — this browser is blocking storage, so it won’t be here after a refresh');
+        else if (tight) toast('✓ Pin image added — images are what fill this browser up, and you’re near its limit. Back up soon.');
+        else toast('✓ Pin image added — stored only on this device');
+      });
     };
     im.onerror = () => toast('Couldn’t read that image — try a JPG or PNG');
     im.src = reader.result;
@@ -3684,6 +3946,7 @@ function viewStart() {
           ${active ? `<button class="btn btn-primary" data-action="sample-clear">Clear example data</button>` : staticChip('good', 'checkcircle', 'Example cleared')}
           <button class="btn" data-action="backup">${icon('download', 14)}Back up now</button>
         </div>
+        <p style="margin:10px 0 0;font-size:12px;color:var(--ink-2)">Your backup file is about <strong>${backupSizeMB() < 0.1 ? 'under 0.1' : backupSizeMB().toFixed(1)} MB</strong> — your pin images travel inside it, so a large file is normal and a slow download isn't a failure.</p>
       </div></section>
   </div>`;
 }
@@ -5208,10 +5471,10 @@ function addModalHTML() {
       })() : ''}
       ${list === 'pins' ? `<div style="display:flex;gap:12px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--hairline);background:var(--surface-alt)">
         <span style="width:64px;flex:0 0 auto;pointer-events:none">${pinThumbHTML(d, row, {size: 'sm', tools: false, cls: 'pt-modal'})}</span>
-        <span style="flex:1;font-size:12px;color:var(--ink-2)">${row.img ? 'Your pin image is attached.' : editMode ? 'Showing placeholder art — attach your real pin design (JPG/PNG, cropped to 2:3 automatically).' : 'Optional — attach your pin design now or any time later (JPG/PNG, cropped to 2:3 automatically).'}</span>
+        <span style="flex:1;font-size:12px;color:var(--ink-2)">${hasPinImg(row) ? 'Your pin image is attached.' : editMode ? 'Showing placeholder art — attach your real pin design (JPG/PNG, cropped to 2:3 automatically).' : 'Optional — attach your pin design now or any time later (JPG/PNG, cropped to 2:3 automatically).'}</span>
         <span style="display:flex;flex-direction:column;gap:6px;align-items:stretch">
-          <button class="btn" data-action="pinimg" data-id="${row.id}">${icon('image', 13)}${row.img ? 'Replace image' : 'Attach image'}</button>
-          ${row.img ? `<button class="btn btn-ghost" data-action="pinimgdel" data-id="${row.id}">${icon('x', 12)}Remove</button>` : ''}
+          <button class="btn" data-action="pinimg" data-id="${row.id}">${icon('image', 13)}${hasPinImg(row) ? 'Replace image' : 'Attach image'}</button>
+          ${hasPinImg(row) ? `<button class="btn btn-ghost" data-action="pinimgdel" data-id="${row.id}">${icon('x', 12)}Remove</button>` : ''}
         </span>
       </div>` : ''}
       <div class="addform">${spec.fields.map(fieldHTML).join('')}</div>
@@ -5368,8 +5631,18 @@ document.addEventListener('click', e => {
   }
   else if (act === 'pinimgdel') {
     const idx = (D().pins || []).findIndex(p => p.id === btn.dataset.id);
-    if (idx > -1) { setPath(`pins.${idx}.img`, null); save(true); render(); toast('Placeholder art is back'); }
-    else if (ui.addModal && ui.addModal.row && ui.addModal.row.id === btn.dataset.id) { ui.addModal.row.img = null; render(); toast('Placeholder art is back'); }
+    if (idx > -1) {
+      const p = D().pins[idx];
+      assetDel(p.id);
+      delete p.img;          // legacy inline copy, if this file predates the split
+      p.hasImg = false;
+      save(true); render(); toast('Placeholder art is back');
+    }
+    else if (ui.addModal && ui.addModal.row && ui.addModal.row.id === btn.dataset.id) {
+      const r = ui.addModal.row;
+      assetDel(r.id); r.img = null; r.hasImg = false;
+      render(); toast('Placeholder art is back');
+    }
   }
   else if (act === 'season-open') {
     const idx = (D().seasons || []).findIndex(s2 => s2.id === btn.dataset.id);
@@ -5399,6 +5672,7 @@ document.addEventListener('click', e => {
     const label = arr[i] && (arr[i].title || arr[i].name || arr[i].term || arr[i].label || arr[i].seed) || 'this row';
     if (!confirm(`Delete “${String(label).slice(0, 60)}”?`)) return;
     const gone = arr.splice(i, 1)[0];
+    if (list === 'pins' && gone) assetDel(gone.id);   // the pin's image goes with the pin
     // the deleted row can be the one whose drawer is open — drop the stale reference
     if (gone && gone.id === ui.openPin) ui.openPin = null;
     if (gone && gone.id === ui.openBoard) ui.openBoard = null;
@@ -5418,6 +5692,14 @@ document.addEventListener('click', e => {
       else if (v !== '' || editMode) row[k] = v;
     });
     if (!editMode) listRef(list).push(row);
+    /* A draft carried its picture inline because it had no id to file it under. It has
+       one now — move it into the store so it never reaches the state blob. Applies in
+       edit mode too, which quietly migrates a pin from a pre-split file. */
+    if (list === 'pins' && typeof row.img === 'string' && row.img.slice(0, 5) === 'data:') {
+      assetSet(row.id, row.img);
+      row.hasImg = true;
+      delete row.img;
+    }
     ui.addModal = null;
     if (!editMode) {
       // a new pin must be visible immediately: clear any status filter that would
@@ -5441,6 +5723,7 @@ document.addEventListener('click', e => {
     const arr = listRef(list);
     const label = arr[i] && (arr[i].title || arr[i].name || arr[i].term || arr[i].label || arr[i].seed) || 'this row';
     if (!confirm(`Delete “${String(label).slice(0, 60)}”?`)) return;
+    if (list === 'pins' && arr[i]) assetDel(arr[i].id);   // the pin's image goes with the pin
     arr.splice(i, 1);
     save(true); render();
   }
@@ -5570,8 +5853,13 @@ document.addEventListener('change', e => {
   }
 });
 
-/* Init — brand fonts are embedded in the stylesheet, so no network is ever needed */
-render();
+/* Init — brand fonts are embedded in the stylesheet, so no network is ever needed.
+   Pin images live outside the state blob and load asynchronously, so they are hydrated
+   BEFORE the first paint: pinThumbSrc() is synchronous, and a render that beat the
+   hydration would paint placeholder art over every design the buyer has attached.
+   hydrateAssets() never rejects and gives up after 1.5s, so a browser without usable
+   IndexedDB costs a moment at boot and then runs on the localStorage tier. */
+hydrateAssets().then(migrateInlineImages).then(render, render);
 window.addEventListener('hashchange', () => {
   const h = location.hash.replace('#', '');
   if (VIEWS.some(v => v.id === h) && h !== ui.view) { ui.view = h; animPending = true; render(); }
